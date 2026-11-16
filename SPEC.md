@@ -29,22 +29,24 @@ Types are defined in apps/api/src/schemas.ts
 
 ## Decisions
 
-- Dates are "YYYY-MM-DD" strings, not Date
-- If any values return "" we map it to null.
-- url built in the backend: /Archives/edgar/data/{CIK no zeros}/{accession no dashes}/{primaryDocument}
-- Ticker lookup case-insensitive: "." and "-" are the same (BRK.B = BRK-B), the response returns the format BRK-B
-- total = count after filtering. Page past the end -> empty items, correct total. No matches -> total 0, totalPages 0.
-- Sort by filingDate (asc|desc, default desc). If two filings have the same date, sort them by acceptanceDateTime, then accessionNumber.
-- Form filter: exact match, case-insensitive, comma-separated. 10-K/A is its own form.
-- Data source: use filings.recent only , include a coverage fields that tells the client the date range and whether older filings exist (complete = filings.files is empty). Coverage is about all the loaded filings, not only the filtered ones.
-- Summary window: filingDate >= today - 365 days, today included, returned as window. "today" is the UTC date, not the local date.
-- countsByForm uses the form names exactly as the SEC writes them. Amendments are counted on their own (10-K/A).
-- latest10K ignores 10-K/A. latestAnnualReport is the newest 10-K, 20-F or 40-F (for foreign companies like SPOT). Both look at all of filings.recent, not only the last 12 months.
-- Summary: partial success (200 with results + errors, even if every ticker fails). Results keep the order of the request.
-- SEC: User-Agent from env SEC_USER_AGENT (check at startup , fail if missing), max 10 req/s.
-- Cache: in memory, tickers 24 h, submissions 10 min, if same URL calls fetch only once, don't cache failed calls. Expired data is never returned (502 instead).
-- Framework: Elysia 1.4 , stable version
-- Tests give the code a fixed "today" (the day the fixtures were downloaded), so the 12-month counts in the tests don't change when the real date moves on
+- Dates are plain "YYYY-MM-DD" strings, not Date objects.
+- reportDate and description are sometimes empty in the SEC data. We return null for those.
+- url is the full link to the document on sec.gov.
+- Tickers are not case sensitive, and BRK.B and BRK-B are the same. We return the ticker the way the SEC writes it (BRK-B).
+- If a ticker is not in company_tickers.json, we return 404.
+- For the tickers list, we first clean up spaces, case and duplicates, then check there are between 1 and 20.
+- total counts the filings after the filter. A page after the last one gives an empty list.
+- Filings are sorted by filing date, newest first by default. If two have the same date, we use the time the SEC accepted them, then the accession number.
+- The form filter needs the exact form name, but case doesn't matter. 10-K doesn't match 10-K/A.
+- We only use filings.recent. The coverage field says which dates we have and if there are older filings we didn't load
+- The summary counts filings from the last 12 months, using the UTC date. The SEC gives some late filings next Monday's date, and we count those too.
+- Form names are counted exactly as the SEC writes them, so 10-K/A, SC 13G and SCHEDULE 13G each get their own count.
+- latest10K and latestAnnualReport skip amendments. latestAnnualReport also accepts 20-F and 40-F, for foreign companies like Spotify. null means we didn't find one in filings.recent.
+- If one ticker fails in the summary, we still return the others and list the failed one in errors. Results come back in the same order as the request. If the ticker list from the SEC can't be loaded, the whole request fails with 502.
+- The SEC needs a User-Agent with a name and email. It comes from SEC_USER_AGENT, and the server won't start without it. We send at most 10 requests per second.
+- The cache is in memory: 24 hours for the ticker list, 10 minutes for company filings. If two requests ask for the same URL at the same time, we only call the SEC once. Failed calls are not cached. We never return expired data, we return 502 instead.
+- We use Elysia 1.4, the stable version.
+- Tests use a fixed "today" (2026-11-16), so the 12-month counts don't change over time.
 
 ## Errors
 
@@ -55,4 +57,4 @@ Types are defined in apps/api/src/schemas.ts
 
 ## Not in scope
 
-No database, no auth, no persistent cache, no full history via filings.files
+- No database, no auth, no persistent cache, no full history via filings.files
