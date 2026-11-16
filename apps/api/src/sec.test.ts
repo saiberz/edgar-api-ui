@@ -111,6 +111,33 @@ describe("secFetch", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("callers sharing a failed request all get the error, and the next call tries again", async () => {
+    let fail = true;
+    const { secFetch, calls } = setup(() => (fail ? new Response("Error", { status: 500 }) : Response.json({ ok: true })));
+
+    const results = await Promise.allSettled([secFetch(FILINGS_URL), secFetch(FILINGS_URL)]);
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    expect(calls).toHaveLength(1);
+
+    fail = false;
+    expect(await secFetch(FILINGS_URL)).toEqual({ ok: true });
+    expect(calls).toHaveLength(2);
+  });
+
+  test("runs the check before caching, so bad data is not cached", async () => {
+    let good = false;
+    const { secFetch, calls } = setup(() => Response.json({ good }));
+    const check = (data: unknown) => {
+      if (!(data as { good: boolean }).good) throw new AppError("UPSTREAM_UNAVAILABLE", "bad data");
+    };
+
+    await expect(secFetch(FILINGS_URL, check)).rejects.toThrow("bad data");
+
+    good = true;
+    expect(await secFetch(FILINGS_URL, check)).toEqual({ good: true });
+    expect(calls).toHaveLength(2);
+  });
+
   test("starts requests at least 100 ms apart", async () => {
     const { secFetch, calls } = setup();
 

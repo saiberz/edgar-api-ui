@@ -1,13 +1,14 @@
 {
   "name": "edgar-api-ui",
-  "module": "index.ts",
   "type": "module",
   "private": true,
   "workspaces": [
     "apps/*"
   ],
   "scripts": {
-    "typecheck": "bun check"
+    "dev": "bun --filter './apps/*' dev",
+    "test": "bun run --cwd apps/api test",
+    "typecheck": "bun run --cwd apps/api typecheck"
   },
   "devDependencies": {
     "@types/bun": "latest"

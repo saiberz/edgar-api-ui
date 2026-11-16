@@ -1,10 +1,10 @@
 import { openapi } from "@elysiajs/openapi";
 import { Elysia, t, ValidationError } from "elysia";
-import { coverage, filterByForm, parseList, sortFilings, toFiling, toFilings, type Submissions } from "./filings";
+import { checkSubmissions, coverage, filterByForm, parseList, sortFilings, toFiling, toFilings, type Submissions } from "./filings";
 import { ApiError, FilingsPage, SummaryResponse } from "./schemas";
-import { AppError, submissionsUrl, TICKERS_URL, type SecFetch } from "./sec";
+import { AppError, submissionsUrl, type SecFetch } from "./sec";
 import { summarize, summaryWindow } from "./summary";
-import { normalize, resolveTicker } from "./tickers";
+import { loadTickers, normalize, resolveTicker } from "./tickers";
 
 // The tickers list after clean-up, used to return a normal 422 when there are too few or too many
 const TickerList = t.Object({ tickers: t.Array(t.String(), { minItems: 1, maxItems: 20 }) });
@@ -16,7 +16,7 @@ type AppOptions = {
 
 export function createApp({ secFetch, now }: AppOptions) {
   async function loadFilings(cik: string) {
-    const submissions = (await secFetch(submissionsUrl(cik))) as Submissions;
+    const submissions = (await secFetch(submissionsUrl(cik), checkSubmissions)) as Submissions;
     return { submissions, rows: toFilings(submissions) };
   }
 
@@ -69,7 +69,7 @@ export function createApp({ secFetch, now }: AppOptions) {
         }
 
         // If the ticker list can't be loaded, the whole request fails with 502
-        await secFetch(TICKERS_URL);
+        await loadTickers(secFetch);
 
         const window = summaryWindow(now());
         const outcomes = await Promise.all(

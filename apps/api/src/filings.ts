@@ -1,5 +1,6 @@
 import type { Static } from "elysia";
 import type { Filing } from "./schemas";
+import { AppError } from "./sec";
 
 // Only the parts of the SEC submissions JSON that we read
 export type Submissions = {
@@ -19,6 +20,42 @@ export type Submissions = {
     files: { name: string; filingCount: number; filingFrom: string; filingTo: string }[];
   };
 };
+
+const COLUMNS: (keyof Submissions["filings"]["recent"])[] = [
+  "accessionNumber",
+  "filingDate",
+  "reportDate",
+  "acceptanceDateTime",
+  "form",
+  "primaryDocument",
+  "primaryDocDescription",
+];
+
+function badData(reason: string): AppError {
+  return new AppError("UPSTREAM_UNAVAILABLE", `The SEC returned unexpected filings data: ${reason}`);
+}
+
+// Checks the parts of the SEC JSON that we read, so bad data gives a 502 instead of a crash
+export function checkSubmissions(data: unknown): asserts data is Submissions {
+  const submissions = data as { cik?: unknown; filings?: { recent?: Record<string, unknown>; files?: unknown } } | null;
+
+  if (typeof submissions?.cik !== "string") throw badData("cik is missing");
+
+  const recent = submissions.filings?.recent;
+  if (typeof recent !== "object" || recent === null) throw badData("filings.recent is missing");
+
+  for (const column of COLUMNS) {
+    const values = recent[column];
+    if (!Array.isArray(values) || !values.every((value) => typeof value === "string")) {
+      throw badData(`filings.recent.${column} is missing or not a list of strings`);
+    }
+  }
+
+  const lengths = new Set(COLUMNS.map((column) => (recent[column] as string[]).length));
+  if (lengths.size > 1) throw badData("the filings.recent columns have different lengths");
+
+  if (!Array.isArray(submissions.filings?.files)) throw badData("filings.files is missing");
+}
 
 // acceptanceDateTime is not in the response, we only keep it to sort filings with the same date
 export type FilingRow = Static<typeof Filing> & { acceptanceDateTime: string };

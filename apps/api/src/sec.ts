@@ -27,7 +27,8 @@ export function requireUserAgent(env: Record<string, string | undefined>): strin
 }
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
-export type SecFetch = (url: string) => Promise<unknown>;
+// check throws if the data doesn't have the shape we expect
+export type SecFetch = (url: string, check?: (data: unknown) => void) => Promise<unknown>;
 
 type SecFetchOptions = {
   userAgent: string;
@@ -60,7 +61,7 @@ export function createSecFetch({
     return turn;
   }
 
-  async function load(url: string): Promise<unknown> {
+  async function load(url: string, check?: (data: unknown) => void): Promise<unknown> {
     await waitForTurn();
 
     let response: Response;
@@ -83,19 +84,22 @@ export function createSecFetch({
       throw new AppError("UPSTREAM_UNAVAILABLE", `The SEC returned invalid JSON: ${url}`);
     }
 
+    // Before caching, so bad data is not cached
+    check?.(data);
+
     const ttl = url === TICKERS_URL ? TICKERS_TTL_MS : FILINGS_TTL_MS;
     cache.set(url, { data, expiresAt: now() + ttl });
     return data;
   }
 
-  return function secFetch(url: string): Promise<unknown> {
+  return function secFetch(url: string, check?: (data: unknown) => void): Promise<unknown> {
     const cached = cache.get(url);
     if (cached && now() < cached.expiresAt) return Promise.resolve(cached.data);
 
     const pending = inFlight.get(url);
     if (pending) return pending;
 
-    const request = load(url).finally(() => inFlight.delete(url));
+    const request = load(url, check).finally(() => inFlight.delete(url));
     inFlight.set(url, request);
     return request;
   };

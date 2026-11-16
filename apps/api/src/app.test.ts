@@ -14,12 +14,18 @@ const files: Record<string, string> = {
 
 const TODAY = Date.parse("2026-11-16T12:00:00Z");
 
-function setup({ now = TODAY, down = [] as string[] } = {}) {
+// Valid JSON, but the wrong shape for both the ticker list and company filings
+const BAD_DATA = { cik: "0000320193", filings: {} };
+
+// down: URLs that return a 500. bad: URLs that return BAD_DATA.
+// Tests can empty these lists later to make the SEC work again.
+function setup({ now = TODAY, down = [] as string[], bad = [] as string[] } = {}) {
   const secFetch = createSecFetch({
     userAgent: "Test User test@example.com",
     fetch: async (url) => {
       const file = files[url];
       if (!file || down.includes(url)) return new Response("Error", { status: 500 });
+      if (bad.includes(url)) return Response.json(BAD_DATA);
       return new Response(Bun.file(`${fixtures}/${file}`));
     },
     now: () => now,
@@ -30,6 +36,16 @@ function setup({ now = TODAY, down = [] as string[] } = {}) {
 }
 
 const get = setup();
+
+// The ticker list loads, but loading filings hits a bug (not an AppError)
+const appWithBug = createApp({
+  secFetch: async (url) => {
+    if (url === TICKERS_URL) return Bun.file(`${fixtures}/company_tickers.json`).json();
+    throw new TypeError("a bug");
+  },
+  now: () => TODAY,
+});
+const getWithBug = (path: string) => appWithBug.handle(new Request(`http://localhost${path}`));
 
 async function json(path: string) {
   const response = await get(path);
@@ -165,6 +181,46 @@ describe("GET /companies/:ticker/filings", () => {
 
     expect((await get("/companies/AAPL/filings")).status).toBe(502);
   });
+
+  test("502 when the SEC sends filings data in an unexpected shape", async () => {
+    const get = setup({ bad: [submissionsUrl("0000320193")] });
+    const response = await get("/companies/AAPL/filings");
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      code: "UPSTREAM_UNAVAILABLE",
+      message: expect.stringContaining("unexpected filings data"),
+    });
+  });
+
+  test("502 when the SEC sends a ticker list in an unexpected shape, and the next request tries again", async () => {
+    const bad = [TICKERS_URL];
+    const get = setup({ bad });
+    const response = await get("/companies/AAPL/filings");
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      code: "UPSTREAM_UNAVAILABLE",
+      message: expect.stringContaining("unexpected ticker list"),
+    });
+
+    bad.length = 0;
+    expect((await get("/companies/AAPL/filings")).status).toBe(200);
+  });
+
+  test.each(["down", "bad"] as const)("a failed SEC request (%s) doesn't break the next one", async (failure) => {
+    const failing = [submissionsUrl("0000320193")];
+    const get = setup({ [failure]: failing });
+
+    expect((await get("/companies/AAPL/filings")).status).toBe(502);
+
+    failing.length = 0;
+    expect((await get("/companies/AAPL/filings")).status).toBe(200);
+  });
+
+  test("any other error is a 500, so bugs still show", async () => {
+    expect((await getWithBug("/companies/AAPL/filings")).status).toBe(500);
+  });
 });
 
 describe("GET /filings/summary", () => {
@@ -239,6 +295,34 @@ describe("GET /filings/summary", () => {
 
     expect(response.status).toBe(502);
     expect((await response.json()).code).toBe("UPSTREAM_UNAVAILABLE");
+  });
+
+  test("502 when the SEC sends a ticker list in an unexpected shape, and the next request tries again", async () => {
+    const bad = [TICKERS_URL];
+    const get = setup({ bad });
+    const response = await get("/filings/summary?tickers=AAPL");
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).code).toBe("UPSTREAM_UNAVAILABLE");
+
+    bad.length = 0;
+    expect((await get("/filings/summary?tickers=AAPL")).status).toBe(200);
+  });
+
+  test("bad SEC data for one ticker goes to errors, the others still return", async () => {
+    const get = setup({ bad: [submissionsUrl("0001639920")] });
+    const response = await get("/filings/summary?tickers=AAPL,SPOT");
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.results.map((r: { ticker: string }) => r.ticker)).toEqual(["AAPL"]);
+    expect(body.errors).toEqual([
+      { ticker: "SPOT", code: "UPSTREAM_UNAVAILABLE", message: expect.stringContaining("unexpected filings data") },
+    ]);
+  });
+
+  test("any other error is a 500, so bugs still show", async () => {
+    expect((await getWithBug("/filings/summary?tickers=AAPL")).status).toBe(500);
   });
 });
 

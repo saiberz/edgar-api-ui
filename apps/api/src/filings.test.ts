@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { coverage, filterByForm, parseList, sortFilings, toFiling, toFilings, type Submissions } from "./filings";
+import {
+  checkSubmissions,
+  coverage,
+  filterByForm,
+  parseList,
+  sortFilings,
+  toFiling,
+  toFilings,
+  type Submissions,
+} from "./filings";
+import { AppError } from "./sec";
 
 const fixture = (name: string): Promise<Submissions> =>
   Bun.file(`${import.meta.dir}/../../../fixtures/${name}`).json();
@@ -114,6 +124,39 @@ describe("sortFilings", () => {
     sortFilings(rows, "asc");
 
     expect(rows).toEqual(copy);
+  });
+});
+
+describe("checkSubmissions", () => {
+  function expectBadData(data: unknown) {
+    expect(() => checkSubmissions(data)).toThrow(AppError);
+    expect(() => checkSubmissions(data)).toThrow("The SEC returned unexpected filings data");
+  }
+
+  test("accepts the fixtures", () => {
+    expect(() => checkSubmissions(aapl)).not.toThrow();
+    expect(() => checkSubmissions(spot)).not.toThrow();
+  });
+
+  test.each([[null], ["<html>"], [[]]])("throws UPSTREAM_UNAVAILABLE for %p", (data) => {
+    expectBadData(data);
+  });
+
+  // Each one breaks a copy of AAPL.json
+  test.each([
+    ["no cik", (s: any) => delete s.cik],
+    ["no filings", (s: any) => delete s.filings],
+    ["no filings.recent", (s: any) => delete s.filings.recent],
+    ["a missing column", (s: any) => delete s.filings.recent.form],
+    ["a column that is not a list", (s: any) => (s.filings.recent.filingDate = "2026-11-12")],
+    ["a value that is not a string", (s: any) => (s.filings.recent.filingDate[3] = null)],
+    ["columns of different length", (s: any) => s.filings.recent.primaryDocument.pop()],
+    ["no filings.files", (s: any) => delete s.filings.files],
+  ])("throws UPSTREAM_UNAVAILABLE for %s", (_, breakIt) => {
+    const data = structuredClone(aapl);
+    breakIt(data);
+
+    expectBadData(data);
   });
 });
 
