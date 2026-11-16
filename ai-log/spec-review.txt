@@ -1,0 +1,157 @@
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Developer/playground/edgar-api-ui/fixtures
+
+
+❯ /clear                                                                        
+
+❯ Read SPEC.md, GLOSSARY.md, apps/api/src/schemas.ts and the test data in       
+  fixtures/, don't write code, list  unclear points or mistakes, each with      
+  evidence from the test data, highlights which ones you're unsure about        
+
+  Listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+⏺ I didn't change any files. Below are 20 issues with SPEC.md, GLOSSARY.md and
+  schemas.ts, grouped by how sure I am. The ones marked ⚠️ are the ones I'm not
+  sure about. I checked every example in the glossary and README against the
+  fixtures and they all match (the JPM FWP, the AAPL Form 4 and DEF 14A, the 8-K
+  accession number, SPOT's 8 20-Fs and 97 6-Ks).
+
+  Likely mistakes
+
+  1. The fixtures were probably downloaded on 2026-11-14, not 2026-11-16, and 
+  the spec never records the date.
+  - The tests depend on this fixed "today", so it should be written down.
+  - The newest acceptanceDateTime in all three files is JPM
+    2026-11-14T02:03:23Z, a Friday evening in New York. AAPL's newest is 11-12
+    and SPOT's is 11-13.
+  - Yet JPM has 10+ 424B2/FWP rows with filingDate: "2026-11-16", all accepted
+    on 11-13 or 11-14. The SEC gave them Monday's date in advance.
+  - So a filing's date can be later than the download day. The summary window.to
+    = today has no rule for filings dated after to. Are they counted?
+  - ⚠️ I can't prove the download day. It could also have been early on 11-16
+    before any new filings came in.
+
+  2. Sort tie-breaks have no direction.
+  - "then acceptanceDateTime, then accessionNumber" doesn't say ascending or
+    descending, or whether they flip when sort=asc.
+  - Ties do happen. AAPL rows 3 and 4 are two Form 4s, both filed 2026-11-03 and
+    accepted at 21:15:17Z, with accessions …-041803 and …-041799. JPM has 61
+    such pairs, and SPOT has 1.
+  - The SEC's own order puts the higher accession number first. That makes a
+    sensible default for desc.
+
+  3. url is a path, not a full link.
+  - /Archives/edgar/data/... has no https://www.sec.gov in front of it.
+  - A frontend <a href> would point at the app's own server.
+
+  4. Filings that were never electronic get links that probably don't work.
+  - For example, AAPL NO ACT 2016-12-05 has primaryDocument
+    9999999997-17-000002.paper and description "AUTO-GENERATED PAPER DOCUMENT".
+  - AAPL and SPOT have 22 .paper/.txt/.pdf primary documents each, and JPM
+    has 2.
+  - ⚠️ I haven't checked what the SEC actually serves at those URLs.
+
+  5. The "empty string → null" rule is too broad for the schema.
+  - The spec says "If any values return "" we map it to null". But only
+    reportDate and description are nullable in Filing.
+  - In the fixtures, only those two fields are ever "" among the fields we
+    return. For example, 95 empty primaryDocDescription in AAPL, and JPM
+    reportDate empty in 26,284 of its rows.
+  - The rule should name the two fields.
+
+  6. The 422 error body doesn't match the other errors.
+  - 404 and 502 return ApiError {code, message}. 422 returns Elysia's own
+    validation shape, which isn't in schemas.ts.
+  - The frontend will have to handle two error shapes.
+
+  7. GLOSSARY.md has a heading that doesn't match the data.
+  - The row is titled filings.file, but the JSON key is filings.files.
+
+  8. A GLOSSARY.md rule doesn't hold for every filing.
+  - The acceptanceDateTime row says "late-day submissions get the next business
+    day's filingDate".
+  - AAPL Form 4 0000320193-23-000093 was accepted 2023-10-04T01:09:17Z (21:09
+    New York time) and still has filingDate: "2023-10-03".
+  - ⚠️ This is likely because Forms 3/4/5 have a later cutoff, but I haven't
+    confirmed that.
+
+  Unclear points (the spec needs to decide)
+
+  9. The ticker lookup can't be tested properly with these fixtures.
+  - company_tickers.json lists BRK-B, NVDA and MSFT, but there are no
+    submissions files for them. So the BRK.B = BRK-B rule can't be tested from
+    start to finish.
+  - JPM's submissions list 9 tickers (JPM-PC, AMJB, VYLD, …), but
+    company_tickers.json only has JPM. Is JPM-PC a 404?
+  - ⚠️ I don't know whether the real company_tickers.json lists those extra
+    tickers.
+
+  10. company.ticker isn't defined.
+  - It could be the ticker as the user typed it, the normalized form, or the
+    entry from company_tickers. For JPM, which of its 9 tickers?
+
+  11. The order of input clean-up for tickers is unclear.
+  - Does duplicate removal happen before or after the ./- normalization? That
+    decides whether BRK.B,BRK-B counts as one ticker.
+  - Is the 20-ticker limit counted before or after duplicates are removed?
+  - Are tickers=, and tickers=AAPL,,MSFT "empty" (422), or are the empty entries
+    just dropped?
+  - Two different tickers for the same company (JPM,JPM-PC) would give two
+    results for one CIK.
+
+  12. Old and new form names are split.
+  - AAPL and SPOT both have SC 13G/SC 13G/A and SCHEDULE 13G/SCHEDULE 13G/A.
+  - With exact matching, form=SC 13G misses the newer filings, and countsByForm
+    splits them into separate counts.
+  - That follows the spec as written, but you should confirm it's what you want.
+
+  13. Amendment rules for latestAnnualReport aren't stated.
+  - Only latest10K says it ignores amendments. Does latestAnnualReport ignore
+    10-K/A, 20-F/A and 40-F/A?
+  - Are other annual forms like 10-KT included?
+  - There's no fixture with an amended annual report or a 40-F, so none of this
+    can be tested.
+
+  14. A null latest10K/latestAnnualReport can mean two things.
+  - It could mean the company never filed one, or that the filing is older than
+    what recent holds.
+  - JPM's recent covers only 2025-11-14 → 2026-11-16, with exactly one 10-K
+    (2026-02-13). Its earlier 10-Ks are in the 72 files the API doesn't load.
+  - CompanySummary has no coverage/complete flag, unlike FilingsPage.
+
+  15. The 12-month window has fencepost problems.
+  - filingDate >= today − 365 with today included covers 366 calendar days.
+  - That also isn't "12 months" in a leap year, and the spec says "12-month
+    counts" in one place and "365 days" in another.
+
+  16. coverage has no rule for an empty recent.
+  - from and to are required strings, so they can't be null.
+  - ⚠️ No fixture has an empty recent, so this might never happen.
+
+  17. Failures for the whole summary request aren't defined.
+  - If company_tickers.json can't be fetched, is the response a 502, or a 200
+    with every ticker in errors[] as UPSTREAM_UNAVAILABLE?
+  - The spec's "even if every ticker fails" suggests the 200, but it doesn't say
+    so.
+
+  18. The edge cases for form aren't covered.
+  - What do form=10-K, and form=, do: empty filter or 422?
+  - Do repeated spaces like DEF  14A count as a match?
+
+  Lower priority / unsure
+
+  19. ⚠️ recent may not always cover the 365-day window.
+  - For JPM it just about covers it: the oldest row is 2025-11-14, and
+    files[0].filingTo is 2025-11-12.
+  - The SEC says recent holds at least a year of filings, so this is probably
+    safe. Worth a note in the spec.
+
+  20. ⚠️ The README's guess that SPOT lost foreign-issuer status looks unlikely.
+  - SPOT kept filing 6-Ks after 2026-03 (12 of them), next to the new Forms 3/4.
+    It hasn't filed any 10-Q or 10-K.
+
+  The ones I'd fix first are 1, 2 and 3 (the test date, sort tie-breaks and full
+  URLs), then 9 through 11 (ticker handling).
+
+✻ Worked for 1m 56s · done 9:41 AM
