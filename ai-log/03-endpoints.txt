@@ -1,0 +1,678 @@
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Developer/playground/edgar-api-ui/apps/api
+
+
+❯ /clear                                                                        
+
+❯ Add the two endpoints from SPEC.md in apps/api. Use the code we already have  
+  (secFetch, resolveTicker, toFilings) and the schemas in schemas.ts. dont      
+  change schemas                                                                
+                                                                                
+  GET /companies/:ticker/filings: filter by form, then sort, then cut the page. 
+  total counts the filings after the filter, return each row in the Filing      
+  shape, without acceptanceDateTime                                             
+                                                                                
+   GET /filings/summary: count the filings per form in the last 12 months, and  
+  find latest10K and latestAnnualReport                                         
+                                                                                
+  also add the openapi plugin, so I can try the endpoints in the browser        
+                                                                                
+  Write the tests with app.handle(new Request(...)) and the fake fetch, plan    
+  now , then test then code                                                     
+
+  Listed 2 directories, ran 3 shell commands (ctrl+o to expand)
+
+⏺ I've read the code, spec and fixtures. Now writing the plan.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ User approved Claude's plan
+  ⎿  Plan saved to: 
+     ~/.claude/plans/add-the-two-endpoints-crystalline-mccarthy.md · /plan to 
+     edit
+     Plan: the two endpoints + OpenAPI
+
+     Context
+
+     secFetch, resolveTicker and toFilings/toFiling exist and are tested. Now we
+     expose them as the two endpoints in SPEC.md, using the shapes in
+     apps/api/src/schemas.ts (unchanged), and add @elysiajs/openapi (already
+     installed, 1.4.17) so you can try them at /openapi. Order of work: tests
+     first (they fail), then code until they pass.
+
+     Files
+
+     New src/app.ts – createApp({ secFetch, now }) returns the chained Elysia
+     app. Taking secFetch and now lets tests use app.handle(new Request(...))
+     with a fake fetch and a fixed date. Contents:
+     - .use(openapi())
+     - .error({ AppError }) + .onError mapping AppError → 404 { code, message }
+       for UNKNOWN_TICKER, 502 { code, message } for UPSTREAM_UNAVAILABLE.
+     - GET /companies/:ticker/filings, query schema:
+       - form: t.Optional(t.String())
+       - sort: t.Optional(t.UnionEnum(["asc","desc"], { default: "desc" }))
+       - page: t.Optional(t.Integer({ minimum: 1, default: 1 }))
+       - pageSize: t.Optional(t.Integer({ minimum: 1, maximum: 100, default: 25 
+         }))
+       - response: { 200: FilingsPage, 404: ApiError, 502: ApiError }
+       - Handler: resolveTicker → secFetch(submissionsUrl(cik)) → toFilings →
+         filter by form → sort → slice the page → map(toFiling).
+     - GET /filings/summary, query tickers: t.String() (missing → Elysia 422),
+       response: { 200: SummaryResponse, 422/502 … }.
+       - Clean the list (see parseList below; tickers also go through the ticker
+         normalize, so brk.b,BRK-B is one ticker), then if the count isn't
+         1–20, throw new ValidationError("query", ...) so the 422 body is
+         Elysia's normal validation error.
+       - await secFetch(TICKERS_URL) first, outside any try, so a failed ticker
+         list fails the whole request with 502.
+       - Then Promise.all over tickers (keeps request order; secFetch already
+         rate-limits). Each ticker: resolve → fetch → summarize; an AppError
+         goes into errors[] as { ticker, code, message }.
+
+     src/index.ts – keeps the SEC_USER_AGENT check, then
+     const app = createApp({ secFetch: createSecFetch({ userAgent }), now: 
+     Date.now }).listen(3000) and export type App = typeof app.
+
+     src/filings.ts – add pure helpers, each with unit tests in filings.test.ts:
+     - parseList(value?: string): string[] – split on commas, trim, uppercase,
+       drop empties, dedupe. Spaces/slashes inside a value are kept (DEF 14A,
+       10-K/A).
+     - filterByForm(rows, forms) – empty forms = no filter; exact match on
+       row.form.toUpperCase(), so 10-K ≠ 10-K/A.
+     - sortFilings(rows, sort) – ascending by filingDate, then
+       acceptanceDateTime, then accessionNumber; desc is the same compare with
+       arguments swapped. Returns a new array.
+     - coverage(submissions, rows) – from = oldest filingDate, to = newest,
+       complete = filings.files.length === 0.
+     - Page: total = filtered count, totalPages = Math.ceil(total / pageSize),
+       items = slice((page-1)*pageSize, page*pageSize) (past the last page →
+       []).
+
+     New src/summary.ts (+ summary.test.ts):
+     - summaryWindow(now) – to = UTC date of now; from = the day after the same
+       date one year earlier (2025-11-17 → 2026-11-16, 12 months inclusive).
+     - summarize(company, rows, window) – countsByForm: rows with filingDate >= 
+       window.from (no upper bound, so late filings dated next Monday count),
+       keyed by the exact SEC form name. latest10K: newest form === "10-K".
+       latestAnnualReport: newest form in 10-K | 20-F | 40-F. Both over all of
+       filings.recent, null if none.
+
+     src/tickers.ts – export the existing normalize so the summary dedupes
+     tickers the same way resolveTicker matches them.
+
+     Tests: src/app.test.ts (written first)
+
+     Setup: real createSecFetch with a fake fetch serving fixtures/ by URL
+     (ticker list, AAPL/SPOT/JPM by CIK; anything else → 500), sleep no-op, now
+     = 2026-11-16T12:00:00Z. Tie-break and failure cases use small inline
+     submissions or a fetch that fails.
+
+     Filings:
+     - AAPL defaults: page 1, pageSize 25, total 1002, totalPages 41, 25 items
+       newest first, items have no acceptanceDateTime, company + coverage
+       (complete: false); SPOT complete: true
+     - form=10-K,8-K filters and total counts the filtered rows; 10-k , 10-K
+       works; 10-K excludes 10-K/A; DEF 14A works; unknown form → 200 empty;
+       form= → no filter
+     - sort=asc oldest first; same filingDate ordered by acceptanceDateTime,
+       then accessionNumber
+     - page past the last → empty items, same total
+     - 422: sort=up, page=0, page=1.5, page=abc, pageSize=0, pageSize=101;
+       unknown params ignored
+     - ZZZZ → 404 UNKNOWN_TICKER; SEC failing → 502 UPSTREAM_UNAVAILABLE
+
+     Summary:
+     - tickers=AAPL,SPOT: window { from: "2025-11-17", to: "2026-11-16" },
+       results in request order, AAPL latest10K = 2026-11-03 10-K, SPOT
+       latest10K: null and latestAnnualReport = 20-F 2026-02-10, a few
+       countsByForm values checked against the fixture (e.g. SC 13G and SCHEDULE
+       13G counted separately)
+     - late filing: with now = Saturday 2026-11-14, JPM's FWP dated Monday
+       2026-11-16 is counted
+     - AAPL,ZZZZ,NVDA,SPOT → results AAPL, SPOT; errors ZZZZ UNKNOWN_TICKER,
+       NVDA UPSTREAM_UNAVAILABLE
+     - dedupe: aapl, AAPL ,brk.b,BRK-B → 2 tickers; 21 distinct → 422; 25 copies
+       of AAPL → OK
+     - missing tickers, tickers=, tickers= ,  → 422
+     - ticker list fails → 502
+
+     OpenAPI: GET /openapi → 200, GET /openapi/json lists both paths.
+
+     Verification
+
+     - cd apps/api && bun test and bunx tsc --noEmit, output shown
+     - Manual: bun run dev and open http://localhost:3000/openapi to try both
+       endpoints (calls the real SEC; that's you, not tests)
+     - No schema changes, no new dependencies, no git commands
+
+⏺ Plan approved. First I'll pull the expected values out of the fixtures.
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ Plan looks good,  one thing only: coverage must use all the rows from         
+  toFilings, not the filtered ones                                              
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ User approved Claude's plan
+  ⎿  Plan saved to: 
+     ~/.claude/plans/add-the-two-endpoints-crystalline-mccarthy.md · /plan to 
+     edit
+     Plan: the two endpoints + OpenAPI
+
+     Context
+
+     secFetch, resolveTicker and toFilings/toFiling exist and are tested. Now we
+     expose them as the two endpoints in SPEC.md, using the shapes in
+     apps/api/src/schemas.ts (unchanged), and add @elysiajs/openapi (already
+     installed, 1.4.17) so you can try them at /openapi. Order of work: tests
+     first (they fail), then code until they pass.
+
+     Files
+
+     New src/app.ts – createApp({ secFetch, now }) returns the chained Elysia
+     app. Taking secFetch and now lets tests use app.handle(new Request(...))
+     with a fake fetch and a fixed date. Contents:
+     - .use(openapi())
+     - .error({ AppError }) + .onError mapping AppError → 404 { code, message }
+       for UNKNOWN_TICKER, 502 { code, message } for UPSTREAM_UNAVAILABLE.
+     - GET /companies/:ticker/filings, query schema:
+       - form: t.Optional(t.String())
+       - sort: t.Optional(t.UnionEnum(["asc","desc"], { default: "desc" }))
+       - page: t.Optional(t.Integer({ minimum: 1, default: 1 }))
+       - pageSize: t.Optional(t.Integer({ minimum: 1, maximum: 100, default: 25 
+         }))
+       - response: { 200: FilingsPage, 404: ApiError, 502: ApiError }
+       - Handler: resolveTicker → secFetch(submissionsUrl(cik)) → toFilings (=
+         all) → coverage(submissions, all) → filter all by form → sort → slice
+         the page → map(toFiling).
+     - GET /filings/summary, query tickers: t.String() (missing → Elysia 422),
+       response: { 200: SummaryResponse, 422/502 … }.
+       - Clean the list (see parseList below; tickers also go through the ticker
+         normalize, so brk.b,BRK-B is one ticker), then if the count isn't
+         1–20, throw new ValidationError("query", ...) so the 422 body is
+         Elysia's normal validation error.
+       - await secFetch(TICKERS_URL) first, outside any try, so a failed ticker
+         list fails the whole request with 502.
+       - Then Promise.all over tickers (keeps request order; secFetch already
+         rate-limits). Each ticker: resolve → fetch → summarize; an AppError
+         goes into errors[] as { ticker, code, message }.
+
+     src/index.ts – keeps the SEC_USER_AGENT check, then
+     const app = createApp({ secFetch: createSecFetch({ userAgent }), now: 
+     Date.now }).listen(3000) and export type App = typeof app.
+
+     src/filings.ts – add pure helpers, each with unit tests in filings.test.ts:
+     - parseList(value?: string): string[] – split on commas, trim, uppercase,
+       drop empties, dedupe. Spaces/slashes inside a value are kept (DEF 14A,
+       10-K/A).
+     - filterByForm(rows, forms) – empty forms = no filter; exact match on
+       row.form.toUpperCase(), so 10-K ≠ 10-K/A.
+     - sortFilings(rows, sort) – ascending by filingDate, then
+       acceptanceDateTime, then accessionNumber; desc is the same compare with
+       arguments swapped. Returns a new array.
+     - coverage(submissions, rows) – called with all rows from toFilings (before
+       the form filter), never the filtered ones. from = oldest filingDate, to
+       = newest, complete = filings.files.length === 0. So coverage describes
+       what we loaded from filings.recent, and doesn't change with form, sort or
+       page.
+     - Page: total = filtered count, totalPages = Math.ceil(total / pageSize),
+       items = slice((page-1)*pageSize, page*pageSize) (past the last page →
+       []).
+
+     New src/summary.ts (+ summary.test.ts):
+     - summaryWindow(now) – to = UTC date of now; from = the day after the same
+       date one year earlier (2025-11-17 → 2026-11-16, 12 months inclusive).
+     - summarize(company, rows, window) – countsByForm: rows with filingDate >= 
+       window.from (no upper bound, so late filings dated next Monday count),
+       keyed by the exact SEC form name. latest10K: newest form === "10-K".
+       latestAnnualReport: newest form in 10-K | 20-F | 40-F. Both over all of
+       filings.recent, null if none.
+
+     src/tickers.ts – export the existing normalize so the summary dedupes
+     tickers the same way resolveTicker matches them.
+
+     Tests: src/app.test.ts (written first)
+
+     Setup: real createSecFetch with a fake fetch serving fixtures/ by URL
+     (ticker list, AAPL/SPOT/JPM by CIK; anything else → 500), sleep no-op, now
+     = 2026-11-16T12:00:00Z. Tie-break and failure cases use small inline
+     submissions or a fetch that fails.
+
+     Filings:
+     - AAPL defaults: page 1, pageSize 25, total 1002, totalPages 41, 25 items
+       newest first, items have no acceptanceDateTime, company + coverage
+       (complete: false); SPOT complete: true
+     - coverage uses all rows: form=10-K and an unknown form (empty items)
+       return the same coverage as no filter
+     - form=10-K,8-K filters and total counts the filtered rows; 10-k , 10-K
+       works; 10-K excludes 10-K/A; DEF 14A works; unknown form → 200 empty;
+       form= → no filter
+     - sort=asc oldest first; same filingDate ordered by acceptanceDateTime,
+       then accessionNumber
+     - page past the last → empty items, same total
+     - 422: sort=up, page=0, page=1.5, page=abc, pageSize=0, pageSize=101;
+       unknown params ignored
+     - ZZZZ → 404 UNKNOWN_TICKER; SEC failing → 502 UPSTREAM_UNAVAILABLE
+
+     Summary:
+     - tickers=AAPL,SPOT: window { from: "2025-11-17", to: "2026-11-16" },
+       results in request order, AAPL latest10K = 2026-11-03 10-K, SPOT
+       latest10K: null and latestAnnualReport = 20-F 2026-02-10, a few
+       countsByForm values checked against the fixture (e.g. SC 13G and SCHEDULE
+       13G counted separately)
+     - late filing: with now = Saturday 2026-11-14, JPM's FWP dated Monday
+       2026-11-16 is counted
+     - AAPL,ZZZZ,NVDA,SPOT → results AAPL, SPOT; errors ZZZZ UNKNOWN_TICKER,
+       NVDA UPSTREAM_UNAVAILABLE
+     - dedupe: aapl, AAPL ,brk.b,BRK-B → 2 tickers; 21 distinct → 422; 25 copies
+       of AAPL → OK
+     - missing tickers, tickers=, tickers= ,  → 422
+     - ticker list fails → 502
+
+     OpenAPI: GET /openapi → 200, GET /openapi/json lists both paths.
+
+     Verification
+
+     - cd apps/api && bun test and bunx tsc --noEmit, output shown
+     - Manual: bun run dev and open http://localhost:3000/openapi to try both
+       endpoints (calls the real SEC; that's you, not tests)
+     - No schema changes, no new dependencies, no git commands
+
+⏺ Coverage now always comes from all toFilings rows. Next I'll pull the expected
+  values from the fixtures.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now the tests, written first. Unit tests for the new helpers:
+
+⏺ Bash(cat >> src/filings.test.ts <<'EOF'…)
+  ⎿  import { describe, expect, test } from "bun:test";
+     import { coverage, filterByForm, parseList, sortFilings, toFiling, toF
+     ilings, type Submissions } from "./filings";
+  ⎿  Updated src/filings.test.ts (+82 -2)
+      1 -import { expect, test } from "bun:test";                        
+      2 -import { toFiling, toFilings, type Submissions } from "./filings
+        -";                                                              
+      1 +import { describe, expect, test } from "bun:test";              
+      2 +import { coverage, filterByForm, parseList, sortFilings, toFilin
+        +g, toFilings, type Submissions } from "./filings";              
+      3  
+      4  const fixture = (name: string): Promise<Submissions> =>
+      5    Bun.file(`${import.meta.dir}/../../../fixtures/${name}`).json(
+         );
+     ...
+       46      ["accessionNumber", "description", "filingDate", "form", "
+           reportDate", "url"],
+       47    );
+       48  });
+       49 +                                                              
+       50 +describe("parseList", () => {                                 
+       51 +  test("splits on commas, trims, uppercases, drops empties and
+          + duplicates", () => {                                         
+       52 +    expect(parseList(" 10-k , 10-K,,8-K ")).toEqual(["10-K", "
+          +8-K"]);                                                       
+       53 +  });                                                         
+       54 +                                                              
+       55 +  test("keeps spaces and slashes inside a value", () => {     
+       56 +    expect(parseList("def 14a,10-K/A")).toEqual(["DEF 14A", "1
+          +0-K/A"]);                                                     
+       57 +  });                                                         
+       58 +                                                              
+       59 +  test("returns an empty list for nothing", () => {           
+       60 +    expect(parseList(undefined)).toEqual([]);                 
+       61 +    expect(parseList("")).toEqual([]);                        
+       62 +    expect(parseList(" , ")).toEqual([]);                     
+       63 +  });                                                         
+       64 +});                                                           
+       65 +                                                              
+       66 +describe("filterByForm", () => {                              
+       67 +  test("keeps only the exact forms, ignoring case", () => {   
+       68 +    const forms = filterByForm(toFilings(aapl), ["10-K", "SCHE
+          +DULE 13G"]).map((f) => f.form);                               
+       69 +                                                              
+       70 +    expect(new Set(forms)).toEqual(new Set(["10-K", "SCHEDULE 
+          +13G"]));                                                      
+       71 +  });                                                         
+       72 +                                                              
+       73 +  test("10-K doesn't match 10-K/A", () => {                   
+       74 +    const rows = [{ ...toFilings(aapl)[0], form: "10-K/A" }]; 
+       75 +                                                              
+       76 +    expect(filterByForm(rows, ["10-K"])).toEqual([]);         
+       77 +  });                                                         
+       78 +                                                              
+     … 50 more lines (ctrl+o to expand)
+
+⏺ Write(src/summary.test.ts)
+  ⎿  Wrote 99 lines to src/summary.test.ts
+      1 import { describe, expect, test } from "bun:test";
+      2 import { toFilings, type Submissions } from "./filings";
+      3 import { summarize, summaryWindow } from "./summary";
+      4 
+      5 const fixture = (name: string): Promise<Submissions> =>
+      6   Bun.file(`${import.meta.dir}/../../../fixtures/${name}`).json()
+        ;
+      7 
+      8 const aapl = await fixture("AAPL.json");
+      9 const spot = await fixture("SPOT.json");
+     … +90 lines (ctrl+o to expand)
+
+⏺ Now the endpoint tests with app.handle and the fake fetch:
+
+⏺ Write(src/app.test.ts)
+  ⎿  Wrote 257 lines to src/app.test.ts
+       1 import { describe, expect, test } from "bun:test";
+       2 import { createApp } from "./app";
+       3 import { createSecFetch, submissionsUrl, TICKERS_URL } from "./s
+         ec";
+       4 
+       5 const fixtures = `${import.meta.dir}/../../../fixtures`;
+       6 
+       7 // What the fake SEC knows. Any other URL gets a 500.
+       8 const files: Record<string, string> = {
+       9   [TICKERS_URL]: "company_tickers.json",
+     … +248 lines (ctrl+o to expand)
+
+⏺ Let me tidy one test I wrote awkwardly (the asc one guesses dates):
+
+⏺ Update(src/app.test.ts)
+  ⎿  Added 3 lines, removed 6 lines
+      110    });
+      111  
+      112    test("sort=asc gives the oldest first", async () => {
+      113 -    const { body } = await json("/companies/AAPL/filings?sort=
+          -asc&pageSize=3");                                             
+      113 +    const { body } = await json("/companies/AAPL/filings?sort=
+          +asc&pageSize=100");                                           
+      114 +    const dates = body.items.map((f: { filingDate: string }) =
+          +> f.filingDate);                                              
+      115  
+      115 -    expect(body.items.map((f: { filingDate: string }) => f.fil
+          -ingDate)).toEqual([                                           
+      116 -      "2015-10-07",                                           
+      117 -      "2015-10-07",                                           
+      118 -      "2015-10-08",                                           
+      119 -    ].slice(0, body.items.length));                           
+      116      expect(body.items[0].accessionNumber).toBe("0001209191-15-
+           074792");
+      117 +    expect(dates).toEqual([...dates].sort());                 
+      118    });
+      119  
+      120    test("pages follow on from each other", async () => {
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Tests fail as expected. Now the code — helpers in filings.ts:
+
+⏺ Bash(cat >> src/filings.ts <<'EOF'…)
+  ⎿   17 pass
+      0 fail
+      21 expect() calls
+     Ran 17 tests across 1 file. [7.00ms]
+  ⎿  Updated src/filings.ts (+37 -0)
+      48      url: row.url,
+      49    };
+      50  }
+      51 +                                                               
+      52 +// "10-K, 8-k,,10-K" -> ["10-K", "8-K"]. Spaces and slashes ins
+         +ide a value are kept (DEF 14A, 10-K/A)                         
+      53 +export function parseList(value: string | undefined): string[] 
+         +{                                                              
+      54 +  if (!value) return [];                                       
+      55 +  const items = value.split(",").map((item) => item.trim().toUp
+         +perCase());                                                    
+      56 +  return [...new Set(items.filter((item) => item !== ""))];    
+      57 +}                                                              
+      58 +                                                               
+      59 +// Exact form names, case insensitive: 10-K doesn't match 10-K/
+         +A. No forms means no filter.                                   
+      60 +export function filterByForm(rows: FilingRow[], forms: string[]
+         +): FilingRow[] {                                               
+      61 +  if (forms.length === 0) return rows;                         
+      62 +  return rows.filter((row) => forms.includes(row.form.toUpperCa
+         +se()));                                                        
+      63 +}                                                              
+      64 +                                                               
+      65 +// Oldest first: by filingDate, then the time the SEC accepted 
+         +it, then accessionNumber                                       
+      66 +function compareFilings(a: FilingRow, b: FilingRow): number {  
+      67 +  return (                                                     
+      68 +    a.filingDate.localeCompare(b.filingDate) ||                
+      69 +    a.acceptanceDateTime.localeCompare(b.acceptanceDateTime) ||
+      70 +    a.accessionNumber.localeCompare(b.accessionNumber)         
+      71 +  );                                                           
+      72 +}                                                              
+      73 +                                                               
+      74 +export function sortFilings(rows: FilingRow[], sort: "asc" | "d
+         +esc"): FilingRow[] {                                           
+      75 +  if (sort === "asc") return rows.toSorted(compareFilings);    
+      76 +  return rows.toSorted((a, b) => compareFilings(b, a));        
+      77 +}                                                              
+      78 +                                                               
+      79 +// Which dates we loaded from filings.recent. Pass all rows, no
+         +t the filtered ones.                                           
+      80 +export function coverage(submissions: Submissions, rows: Filing
+         +Row[]) {                                                       
+      81 +  const dates = rows.map((row) => row.filingDate).sort();      
+      82 +  return {                                                     
+      83 +    from: dates[0],                                            
+      84 +    to: dates[dates.length - 1],                               
+      85 +    complete: submissions.filings.files.length === 0,          
+      86 +  };                                                           
+      87 +}                                                              
+⏺ toSorted may not type-check with the ES2021 target, so I'll use [...rows].sort
+  instead:
+
+⏺ Update(src/filings.ts)
+  ⎿  Added 2 lines, removed 2 lines
+      72  }
+      73  
+      74  export function sortFilings(rows: FilingRow[], sort: "asc" | "d
+          esc"): FilingRow[] {
+      75 -  if (sort === "asc") return rows.toSorted(compareFilings);    
+      76 -  return rows.toSorted((a, b) => compareFilings(b, a));        
+      75 +  if (sort === "asc") return [...rows].sort(compareFilings);   
+      76 +  return [...rows].sort((a, b) => compareFilings(b, a));       
+      77  }
+      78  
+      79  // Which dates we loaded from filings.recent. Pass all rows, no
+          t the filtered ones.
+
+⏺ Write(src/summary.ts)
+  ⎿  Wrote 53 lines to src/summary.ts
+       1 import type { Static } from "elysia";
+       2 import { sortFilings, type FilingRow } from "./filings";
+       3 import type { Company, CompanySummary } from "./schemas";
+       4 
+       5 type Window = { from: string; to: string };
+       6 
+       7 // "YYYY-MM-DD" of a timestamp, in UTC
+       8 function utcDate(time: number): string {
+       9   return new Date(time).toISOString().slice(0, 10);
+      10 }
+     … +43 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ For 29 Feb, setUTCFullYear rolls over to 1 March before the +1, which gives 2
+  March. I'll clamp to the last day of the month instead:
+
+⏺ Update(src/summary.ts)
+  ⎿  Added 7 lines, removed 4 lines
+      11  
+      12  // The last 12 months, both ends included: 2025-11-17 to 2026-1
+          1-16
+      13  export function summaryWindow(now: number): Window {
+      14 -  const from = new Date(now);                                  
+      15 -  from.setUTCFullYear(from.getUTCFullYear() - 1);              
+      16 -  from.setUTCDate(from.getUTCDate() + 1);                      
+      17 -  return { from: utcDate(from.getTime()), to: utcDate(now) };  
+      14 +  const today = new Date(now);                                 
+      15 +  const year = today.getUTCFullYear() - 1;                     
+      16 +  const month = today.getUTCMonth();                           
+      17 +  // The same day a year ago (29 February becomes the 28th), th
+         +en the day after it                                            
+      18 +  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).ge
+         +tUTCDate();                                                    
+      19 +  const from = Date.UTC(year, month, Math.min(today.getUTCDate(
+         +), daysInMonth) + 1);                                          
+      20 +  return { from: utcDate(from), to: utcDate(now) };            
+      21  }
+      22  
+      23  const ANNUAL_REPORT_FORMS = ["10-K", "20-F", "40-F"] as const;
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now app.ts, and export normalize from tickers.ts:
+
+⏺ Bash(sed -i '' 's/^function normalize(ticker: string): string {$/export
+      function normalize(ticker: string): string {/' src/tickers.ts && grep -n
+      "normalize(ticker" s…)
+  ⎿  9:export function normalize(ticker: string): string {
+  ⎿  Updated src/tickers.ts (+1 -1)
+       6  type TickerList = Record<string, { cik_str: number; ticker: str
+          ing; title: string }>;
+       7  
+       8  // Case doesn't matter, and BRK.B is the same as BRK-B
+       9 -function normalize(ticker: string): string {                   
+       9 +export function normalize(ticker: string): string {            
+      10    return ticker.trim().toUpperCase().replaceAll(".", "-");
+      11  }
+      12  
+
+⏺ Write(src/app.ts)
+  ⎿  Wrote 101 lines to src/app.ts
+       1 import { openapi } from "@elysiajs/openapi";
+       2 import { Elysia, t, ValidationError } from "elysia";
+       3 import { coverage, filterByForm, parseList, sortFilings, toFilin
+         g, toFilings, type Submissions } from "./filings";
+       4 import { ApiError, FilingsPage, SummaryResponse } from "./schema
+         s";
+       5 import { AppError, submissionsUrl, TICKERS_URL, type SecFetch } 
+         from "./sec";
+       6 import { summarize, summaryWindow } from "./summary";
+       7 import { normalize, resolveTicker } from "./tickers";
+     … +94 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The error mapping isn't firing. Let me see what code Elysia passes to onError
+  for an AppError:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Elysia takes the error's code (UNKNOWN_TICKER) as the onError code, so the
+  "AppError" check never matches. I'll switch to error instanceof AppError and
+  remove the now-useless .error({ AppError }).
+
+⏺ Update(src/app.ts)
+  ⎿  Added 3 lines, removed 3 lines
+      22  
+      23    return new Elysia()
+      24      .use(openapi())
+      25 -    .error({ AppError })                                       
+      26 -    .onError(({ code, error, status }) => {                    
+      27 -      if (code === "AppError") {                               
+      25 +    // Elysia passes AppError's own code ("UNKNOWN_TICKER") as 
+         +`code`, so we check the class instead                          
+      26 +    .onError(({ error, status }) => {                          
+      27 +      if (error instanceof AppError) {                         
+      28          return status(error.code === "UNKNOWN_TICKER" ? 404 : 5
+          02, { code: error.code, message: error.message });
+      29        }
+      30      })
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ All pass. Now index.ts:
+
+⏺ Write(src/index.ts)
+  ⎿  Added 5 lines, removed 3 lines
+      1 -import { Elysia } from "elysia";                                
+      2 -import { requireUserAgent } from "./sec";                       
+      1 +import { createApp } from "./app";                              
+      2 +import { createSecFetch, requireUserAgent } from "./sec";       
+      3  
+      4  let userAgent: string;
+      5  try {
+     ...
+       9    process.exit(1);
+      10  }
+      11  
+      12 -const app = new Elysia().get("/", () => "Hello Elysia").listen(
+         -3000);                                                         
+      12 +const app = createApp({ secFetch: createSecFetch({ userAgent })
+         +, now: Date.now }).listen(3000);                               
+      13  
+      14 +export type App = typeof app;                                  
+      15 +                                                               
+      16  console.log(
+      17    `🦊 Elysia is running at ${app.server?.hostname}:${app.server
+          ?.port}`
+      18  );
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I added both endpoints and the OpenAPI page. All 88 tests pass and the type
+  check is clean:
+
+  $ bun test
+   88 pass
+   0 fail
+   177 expect() calls
+  Ran 88 tests across 5 files. [59.00ms]
+
+  $ bunx tsc --noEmit
+  (exit 0)
+
+  I wrote the tests first and ran them to confirm they failed, then wrote the
+  code. The endpoint tests call app.handle(new Request(...)) against the real
+  createSecFetch with a fake fetch that serves fixtures/, and "today" is fixed
+  at 2026-11-16. I didn't start the server against the real SEC. To try it
+  yourself, run bun run dev and open http://localhost:3000/openapi.
+
+  What changed
+  - src/app.ts (new): createApp({ secFetch, now }) builds the chained app with
+    openapi(), both routes and the mapping of AppError to a 404 or 502 response.
+    - The filings route does: resolveTicker → toFilings → coverage from all rows
+      (as you asked) → filter by form → sort → cut the page → toFiling.
+    - The summary route loads the ticker list first, so if that fails the whole
+      request returns 502. It then handles each ticker in request order and puts
+      any that fail into errors[].
+  - src/index.ts: builds the app with the real secFetch and adds export type App
+    = typeof app.
+  - src/filings.ts: adds parseList, filterByForm, sortFilings and coverage.
+  - src/summary.ts (new): summaryWindow(now) and summarize(...).
+  - src/tickers.ts: normalize is now exported, so the summary removes duplicate
+    tickers the same way resolveTicker matches them (brk.b and BRK-B count as
+    one).
+  - Tests: new app.test.ts and summary.test.ts, plus more cases in
+    filings.test.ts. schemas.ts is unchanged, I added no dependencies and ran no
+    git commands.
+
+  Things worth checking in the diff
+  - Error mapping: Elysia reports an AppError to onError under the error's own
+    code ("UNKNOWN_TICKER"), not "AppError", so registering it with .error({ 
+    AppError }) didn't work. onError checks error instanceof AppError instead;
+    there's a comment on it in the code.
+  - Ticker count 422: a ticker list that's empty or has more than 20 tickers
+    after clean-up throws Elysia's own ValidationError. So that 422 has the same
+    body as every other validation error, which I checked by hand.
+  - Summary window: both ends are included, from 2025-11-17 to 2026-11-16.
+    Filings dated after the end still count, which is how SPEC.md handles late
+    filings dated the next Monday. One test uses JPM's Saturday filings: with
+    today set to 2026-11-14, two 424B3s dated Monday 2026-11-16 are counted
+    (1,233 + 2 = 1,235). For 29 February, the window starts on 1 March of the
+    year before.
+  - Failed tickers in errors[] are shown after clean-up, so brk.b appears as
+    BRK-B.
+
+✻ Churned for 2m 54s · done 10:46 AM
