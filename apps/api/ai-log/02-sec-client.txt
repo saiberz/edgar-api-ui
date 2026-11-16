@@ -1,0 +1,506 @@
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Developer/playground/edgar-api-ui/apps/api
+
+
+❯ /clear                                                                        
+
+❯ In apps/api, we need to implement:                                            
+  1. secFetch(url): calls the SEC.                                              
+  - Send the User-Agent from the SEC_USER_AGENT env variable, cehck on start up 
+  and stop if it's missing                                                      
+  - rate limit in the simplest way that works: one queue, and at least 100 ms   
+  between the start of two requests                                             
+  - cache responses in memory: 24 hours for the ticker list, 10 minutes for     
+  company filings.                                                              
+  - if the same URL is asked for twice at the same time, make only one request  
+                                                                                
+  2. resolveTicker(input): returns { ticker, cik, name }. Case doesn't matter,  
+  and "." and "-" mean the same thing.                                          
+  3. toFilings(submissions): a pure function that turns the SEC response into a 
+  list of filings, as described in SPEC.md, also keep acceptanceDateTime,       
+  because we need it to sort filings with the same date, even if it's not part  
+  of the response.                                                              
+                                                                                
+  No code yet                                                                   
+
+  Read 4 files, listed 1 directory, ran 2 shell commands (ctrl+o to expand)
+
+⏺ User answered Claude's questions:
+  ⎿  · Which format should resolveTicker use for `cik`? This value is also what 
+     the API returns as company.cik, and SPEC.md doesn't say. → 10-digit padded 
+     (Recommended)
+
+⏺ Updated plan
+  ⎿  /plan to preview
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Plan: secFetch, resolveTicker, toFilings (apps/api)                     │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ The two endpoints in SPEC.md need three building blocks: a polite,      │
+     │ cached SEC client; ticker → company lookup; and turning the SEC's       │
+     │ column-based filings.recent into Filing rows. No routes in this step.   │
+     │ schemas.ts stays as it is.                                              │
+     │                                                                         │
+     │ Files                                                                   │
+     │                                                                         │
+     │ - apps/api/src/sec.ts (new): AppError, requireUserAgent,                │
+     │   createSecFetch, SEC URL constants                                     │
+     │ - apps/api/src/tickers.ts (new): resolveTicker                          │
+     │ - apps/api/src/filings.ts (new): Submissions type, FilingRow type,      │
+     │   toFilings                                                             │
+     │ - apps/api/src/index.ts: startup check only                             │
+     │ - Tests: sec.test.ts, tickers.test.ts, filings.test.ts next to the      │
+     │   sources, reading ../../../fixtures/*.json                             │
+     │                                                                         │
+     │ 1. sec.ts                                                               │
+     │                                                                         │
+     │ export const TICKERS_URL =                                              │
+     │ "https://www.sec.gov/files/company_tickers.json";                       │
+     │ export const submissionsUrl = (cik: string) =>                          │
+     │ `https://data.sec.gov/submissions/CIK${cik}.json`;                      │
+     │                                                                         │
+     │ export class AppError extends Error {                                   │
+     │   constructor(public code: "UNKNOWN_TICKER" | "UPSTREAM_UNAVAILABLE",   │
+     │ message: string) { super(message); }                                    │
+     │ }                                                                       │
+     │                                                                         │
+     │ export function requireUserAgent(env: Record<string, string |           │
+     │ undefined>): string  // throws if missing/blank                         │
+     │                                                                         │
+     │ createSecFetch({ userAgent, fetch = globalThis.fetch, now = Date.now,   │
+     │ sleep = Bun.sleep }) returns secFetch(url): Promise<unknown> (parsed    │
+     │ JSON). It's a factory so tests can pass a fake fetch, a fake clock and  │
+     │ a fake sleep. The fetch param uses a small FetchFn = (url: string,      │
+     │ init?: RequestInit) => Promise<Response> type, so plain fakes           │
+     │ type-check.                                                             │
+     │                                                                         │
+     │ Inside, in this order:                                                  │
+     │ 1. Cache: Map<url, { data, expiresAt }>. Return it if now() <           │
+     │    expiresAt. Expired entries are never returned.                       │
+     │ 2. Same URL at the same time: Map<url, Promise> of requests in flight.  │
+     │    If the URL is already there, return that promise. Delete it in       │
+     │    finally.                                                             │
+     │ 3. Rate limit: one promise chain plus lastStart. Each request waits on  │
+     │    the chain, sleeps lastStart + 100 - now() if that's positive, then   │
+     │    sets lastStart = now(). That keeps at least 100 ms between the       │
+     │    starts of two requests.                                              │
+     │ 4. Fetch with User-Agent and AbortSignal.timeout(10_000). A network     │
+     │    error, timeout, non-2xx (403/429/5xx) or bad JSON throws             │
+     │    AppError("UPSTREAM_UNAVAILABLE", …). Failures are not cached.        │
+     │ 5. TTL: 24 h if url === TICKERS_URL, otherwise 10 min.                  │
+     │                                                                         │
+     │ index.ts: const userAgent = requireUserAgent(Bun.env) at the top,       │
+     │ inside a try. On failure it logs and calls process.exit(1). I'm only    │
+     │ adding this check now. The route chaining and export type App come with │
+     │ the endpoints.                                                          │
+     │                                                                         │
+     │ 2. tickers.ts                                                           │
+     │                                                                         │
+     │ resolveTicker(input: string, secFetch: SecFetch): Promise<{ ticker,     │
+     │ cik, name }>                                                            │
+     │ - normalize = (s) => s.trim().toUpperCase().replaceAll(".", "-")        │
+     │ - Loads TICKERS_URL through secFetch (cached for 24 h). It's an object  │
+     │   keyed by "0", "1", …, so it uses Object.values(...).find(e =>         │
+     │   normalize(e.ticker) === normalize(input)).                            │
+     │ - Returns ticker the way the SEC writes it (BRK-B), cik as              │
+     │   String(cik_str).padStart(10, "0") (your choice), and name = title.    │
+     │ - Not found: throws AppError("UNKNOWN_TICKER", …). Upstream errors from │
+     │   secFetch are passed through unchanged.                                │
+     │                                                                         │
+     │ 3. filings.ts                                                           │
+     │                                                                         │
+     │ - Submissions: a minimal type with only the fields we read (cik, name,  │
+     │   filings.recent columns: accessionNumber, filingDate, reportDate,      │
+     │   acceptanceDateTime, form, primaryDocument, primaryDocDescription,     │
+     │   plus filings.files for coverage later).                               │
+     │ - FilingRow = Static<typeof Filing> & { acceptanceDateTime: string }.   │
+     │   It's internal and is used for sorting by date, then                   │
+     │   acceptanceDateTime, then accession number.                            │
+     │ - toFilings(submissions): FilingRow[] is pure. It walks index i across  │
+     │   the columns and keeps the SEC order. Sorting and filtering happen     │
+     │   later in the endpoint.                                                │
+     │   - reportDate and description (from primaryDocDescription) become null │
+     │     when they are "".                                                   │
+     │   - url =                                                               │
+     │     https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accession  │
+     │     without "-"}/${primaryDocument}                                     │
+     │ - Note for later: when the route returns these rows, acceptanceDateTime │
+     │   must be removed (map to the Filing shape, or rely on Elysia's         │
+     │   response normalize). I'll check this when I write the endpoint.       │
+     │                                                                         │
+     │ Tests (bun test in apps/api, never SEC, no real clock)                  │
+     │                                                                         │
+     │ - sec: sends the User-Agent; requireUserAgent throws on missing or      │
+     │   blank; a second call is served from cache (1 fetch); a fake clock     │
+     │   past 10 min fetches again, and the ticker URL stays cached at 23 h    │
+     │   but refetches after 24 h; two calls at the same time make 1 fetch;    │
+     │   429/500/throwing fetch give UPSTREAM_UNAVAILABLE and the next call    │
+     │   fetches again (failures not cached); rate limit: 3 different URLs     │
+     │   fired together, where the fake sleep moves the fake clock, so start   │
+     │   times are ≥100 ms apart.                                              │
+     │ - tickers (fake fetch serving fixtures/company_tickers.json): aapl,     │
+     │   AAPL, brk.b, BRK-B and Brk.B all resolve, with BRK-B returned as {    │
+     │   ticker: "BRK-B", cik: "0001067983", … }; JPM-PC and ZZZZ give         │
+     │   UNKNOWN_TICKER; the ticker list is fetched only once across calls.    │
+     │ - filings (AAPL, SPOT fixtures): row count equals                       │
+     │   recent.accessionNumber.length (1002 / 390); the first AAPL row is     │
+     │   checked field by field, including the full url; ""                    │
+     │   reportDate/description become null; acceptanceDateTime is kept; a     │
+     │   .paper document still gets a url.                                     │
+     │                                                                         │
+     │ Verification                                                            │
+     │                                                                         │
+     │ cd apps/api && bun test && bunx tsc --noEmit, with the output shown. No │
+     │ new dependencies and no git commands.                                   │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/in-apps-api-we-need-bubbly-map.md · /plan to
+     edit
+     Plan: secFetch, resolveTicker, toFilings (apps/api)
+
+     Context
+
+     The two endpoints in SPEC.md need three building blocks: a polite, cached
+     SEC client; ticker → company lookup; and turning the SEC's column-based
+     filings.recent into Filing rows. No routes in this step. schemas.ts stays
+     as it is.
+
+     Files
+
+     - apps/api/src/sec.ts (new): AppError, requireUserAgent, createSecFetch,
+       SEC URL constants
+     - apps/api/src/tickers.ts (new): resolveTicker
+     - apps/api/src/filings.ts (new): Submissions type, FilingRow type,
+       toFilings
+     - apps/api/src/index.ts: startup check only
+     - Tests: sec.test.ts, tickers.test.ts, filings.test.ts next to the sources,
+       reading ../../../fixtures/*.json
+
+     1. sec.ts
+
+     export const TICKERS_URL =
+     "https://www.sec.gov/files/company_tickers.json";
+     export const submissionsUrl = (cik: string) =>
+     `https://data.sec.gov/submissions/CIK${cik}.json`;
+
+     export class AppError extends Error {
+       constructor(public code: "UNKNOWN_TICKER" | "UPSTREAM_UNAVAILABLE",
+     message: string) { super(message); }
+     }
+
+     export function requireUserAgent(env: Record<string, string | undefined>):
+     string  // throws if missing/blank
+
+     createSecFetch({ userAgent, fetch = globalThis.fetch, now = Date.now, sleep
+     = Bun.sleep }) returns secFetch(url): Promise<unknown> (parsed JSON). It's
+     a factory so tests can pass a fake fetch, a fake clock and a fake sleep.
+     The fetch param uses a small FetchFn = (url: string, init?: RequestInit) =>
+     Promise<Response> type, so plain fakes type-check.
+
+     Inside, in this order:
+     1. Cache: Map<url, { data, expiresAt }>. Return it if now() < expiresAt.
+        Expired entries are never returned.
+     2. Same URL at the same time: Map<url, Promise> of requests in flight. If
+        the URL is already there, return that promise. Delete it in finally.
+     3. Rate limit: one promise chain plus lastStart. Each request waits on the
+        chain, sleeps lastStart + 100 - now() if that's positive, then sets
+        lastStart = now(). That keeps at least 100 ms between the starts of two
+        requests. A failed request must not break the chain. The chain only
+        holds the "wait for my turn" step and never the fetch itself. On top of
+        that it's stored as queue = turn.catch(() => {}), so a rejection can
+        never reach the next caller. The next request still waits its 100 ms and
+        then runs normally.
+     4. Fetch with User-Agent and AbortSignal.timeout(10_000). A network error,
+        timeout, non-2xx (403/429/5xx) or bad JSON throws
+        AppError("UPSTREAM_UNAVAILABLE", …). Failures are not cached.
+     5. TTL: 24 h if url === TICKERS_URL, otherwise 10 min.
+
+     index.ts: const userAgent = requireUserAgent(Bun.env) at the top, inside a
+     try. On failure it logs and calls process.exit(1). I'm only adding this
+     check now. The route chaining and export type App come with the endpoints.
+
+     2. tickers.ts
+
+     resolveTicker(input: string, secFetch: SecFetch): Promise<{ ticker, cik, 
+     name }>
+     - normalize = (s) => s.trim().toUpperCase().replaceAll(".", "-")
+     - Loads TICKERS_URL through secFetch (cached for 24 h). It's an object
+       keyed by "0", "1", …, so it uses Object.values(...).find(e => 
+       normalize(e.ticker) === normalize(input)).
+     - Returns ticker the way the SEC writes it (BRK-B), cik as
+       String(cik_str).padStart(10, "0") (your choice), and name = title.
+     - Not found: throws AppError("UNKNOWN_TICKER", …). Upstream errors from
+       secFetch are passed through unchanged.
+
+     3. filings.ts
+
+     - Submissions: a minimal type with only the fields we read (cik, name,
+       filings.recent columns: accessionNumber, filingDate, reportDate,
+       acceptanceDateTime, form, primaryDocument, primaryDocDescription, plus
+       filings.files for coverage later).
+     - FilingRow = Static<typeof Filing> & { acceptanceDateTime: string }. It's
+       internal and is used for sorting by date, then acceptanceDateTime, then
+       accession number.
+     - toFilings(submissions): FilingRow[] is pure. It walks index i across the
+       columns and keeps the SEC order. Sorting and filtering happen later in
+       the endpoint.
+       - reportDate and description (from primaryDocDescription) become null
+         when they are "".
+       - url = 
+         https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${accession 
+         without "-"}/${primaryDocument}
+     - toFiling(row: FilingRow): Filing builds the response object explicitly,
+       field by field, without acceptanceDateTime. Routes call it after sorting
+       and paging. We don't rely on Elysia's response normalization to drop
+       extra fields.
+
+     Tests (bun test in apps/api, never SEC, no real clock)
+
+     - sec: sends the User-Agent; requireUserAgent throws on missing or blank; a
+       second call is served from cache (1 fetch); a fake clock past 10 min
+       fetches again, and the ticker URL stays cached at 23 h but refetches
+       after 24 h; two calls at the same time make 1 fetch; 429/500/throwing
+       fetch give UPSTREAM_UNAVAILABLE and the next call fetches again (failures
+       not cached); rate limit: 3 different URLs fired together, where the fake
+       sleep moves the fake clock, so start times are ≥100 ms apart; chain 
+       survives a failure: URL A fails (fetch throws or returns 500), and URL B,
+       fired right after, still resolves with its data and still starts ≥100 ms
+       after A.
+     - tickers (fake fetch serving fixtures/company_tickers.json): aapl, AAPL,
+       brk.b, BRK-B and Brk.B all resolve, with BRK-B returned as { ticker: 
+       "BRK-B", cik: "0001067983", … }; JPM-PC and ZZZZ give UNKNOWN_TICKER; the
+       ticker list is fetched only once across calls.
+     - filings (AAPL, SPOT fixtures): row count equals
+       recent.accessionNumber.length (1002 / 390); the first AAPL row is checked
+       field by field, including the full url; "" reportDate/description become
+       null; acceptanceDateTime is kept; a .paper document still gets a url;
+       toFiling returns exactly the 6 Filing keys (Object.keys check, no
+       acceptanceDateTime).
+
+     Verification
+
+     cd apps/api && bun test && bunx tsc --noEmit, with the output shown. No new
+     dependencies and no git commands.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(src/sec.ts)
+  ⎿  Wrote 102 lines to src/sec.ts
+       1 export const TICKERS_URL = "https://www.sec.gov/files/company_ti
+         ckers.json";
+       2 
+       3 export function submissionsUrl(cik: string): string {
+       4   return `https://data.sec.gov/submissions/CIK${cik}.json`;
+       5 }
+       6 
+       7 const MIN_INTERVAL_MS = 100;
+       8 const TIMEOUT_MS = 10_000;
+       9 const TICKERS_TTL_MS = 24 * 60 * 60 * 1000;
+     … +93 lines (ctrl+o to expand)
+
+⏺ Write(src/tickers.ts)
+  ⎿  Wrote 26 lines to src/tickers.ts
+       1 import type { Static } from "elysia";
+       2 import type { Company } from "./schemas";
+       3 import { AppError, TICKERS_URL, type SecFetch } from "./sec";
+       4 
+       5 // company_tickers.json is an object keyed by "0", "1", ...
+       6 type TickerList = Record<string, { cik_str: number; ticker: stri
+         ng; title: string }>;
+       7 
+       8 // Case doesn't matter, and BRK.B is the same as BRK-B
+       9 function normalize(ticker: string): string {
+     … +17 lines (ctrl+o to expand)
+
+⏺ Write(src/filings.ts)
+  ⎿  Wrote 50 lines to src/filings.ts
+       1 import type { Static } from "elysia";
+       2 import type { Filing } from "./schemas";
+       3 
+       4 // Only the parts of the SEC submissions JSON that we read
+       5 export type Submissions = {
+       6   cik: string;
+       7   name: string;
+       8   filings: {
+       9     // Columns: index i across all arrays is one filing, newest 
+         first
+     … +41 lines (ctrl+o to expand)
+
+⏺ Write(src/index.ts)
+  ⎿  Added 9 lines
+       1  import { Elysia } from "elysia";
+       2 +import { requireUserAgent } from "./sec";                      
+       3  
+       4 +let userAgent: string;                                         
+       5 +try {                                                          
+       6 +  userAgent = requireUserAgent(Bun.env);                       
+       7 +} catch (error) {                                              
+       8 +  console.error((error as Error).message);                     
+       9 +  process.exit(1);                                             
+      10 +}                                                              
+      11 +                                                               
+      12  const app = new Elysia().get("/", () => "Hello Elysia").listen(
+          3000);
+      13  
+      14  console.log(
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(src/sec.test.ts)
+  ⎿  Wrote 133 lines to src/sec.test.ts
+       1 import { describe, expect, test } from "bun:test";
+       2 import { AppError, createSecFetch, requireUserAgent, TICKERS_URL
+          } from "./sec";
+       3 
+       4 const USER_AGENT = "Test User test@example.com";
+       5 const FILINGS_URL = "https://data.sec.gov/submissions/CIK0000320
+         193.json";
+       6 
+       7 // A fake clock, a sleep that moves it, and a fake fetch that re
+         cords when each call started
+     … +126 lines (ctrl+o to expand)
+
+⏺ Write(src/tickers.test.ts)
+  ⎿  Wrote 51 lines to src/tickers.test.ts
+       1 import { expect, test } from "bun:test";
+       2 import { AppError, TICKERS_URL } from "./sec";
+       3 import { resolveTicker } from "./tickers";
+       4 
+       5 const tickers = await Bun.file(`${import.meta.dir}/../../../fixt
+         ures/company_tickers.json`).json();
+       6 
+       7 // A fake secFetch that only knows the ticker list
+       8 function setup() {
+       9   const urls: string[] = [];
+     … +42 lines (ctrl+o to expand)
+
+⏺ Write(src/filings.test.ts)
+  ⎿  Wrote 48 lines to src/filings.test.ts
+       1 import { expect, test } from "bun:test";
+       2 import { toFiling, toFilings, type Submissions } from "./filings
+         ";
+       3 
+       4 const fixture = (name: string): Promise<Submissions> =>
+       5   Bun.file(`${import.meta.dir}/../../../fixtures/${name}`).json(
+         );
+       6 
+       7 const aapl = await fixture("AAPL.json");
+       8 const spot = await fixture("SPOT.json");
+     … +40 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+⏺ All 30 tests pass; tsc fails on an existing tsconfig.json setting
+  (moduleResolution), not on the new code, so I'm rechecking the types with that
+  one setting overridden.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Update(src/sec.test.ts)
+  ⎿  Added 1 line, removed 1 line
+      102      let fail = true;
+      103      const { secFetch, calls } = setup(() => (fail ? failure() 
+           : Response.json({ ok: true })));
+      104  
+      105 -    const error = await secFetch(FILINGS_URL).catch((e) => e);
+      105 +    const error = (await secFetch(FILINGS_URL).catch((e) => e)
+          +) as AppError;                                                
+      106      expect(error).toBeInstanceOf(AppError);
+      107      expect(error.code).toBe("UPSTREAM_UNAVAILABLE");
+      108  
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I've added the three building blocks from the plan. All 30 tests pass, but
+  bunx tsc --noEmit fails as the project is configured today. The cause is a
+  setting in apps/api/tsconfig.json, not the new code.
+
+  $ bun test
+   30 pass
+   0 fail
+   58 expect() calls
+  Ran 30 tests across 3 files. [5.00ms]
+
+  $ bunx tsc --noEmit
+  tsconfig.json(30,25): error TS5108: Option 'moduleResolution=node10' has been 
+  removed. Please remove it from your configuration.
+
+  $ bunx tsc --noEmit --moduleResolution bundler
+  (exit 0)
+
+  The tsc failure: the installed TypeScript is 7.0.2, and it no longer accepts
+  "moduleResolution": "node". When I override that one setting on the command
+  line, the code type-checks cleanly. I didn't edit tsconfig.json because it's
+  your config. Changing that line to "bundler" should fix it; say if you want me
+  to do that.
+
+  What's in place
+  - src/sec.ts: createSecFetch({ userAgent, fetch, now, sleep }) returns
+    secFetch(url). In order, it:
+    - serves fresh cached data (24 h for the ticker list, 10 min for anything
+      else);
+    - makes one request when the same URL is asked for twice at the same time;
+    - runs every request through one queue, with at least 100 ms between starts;
+    - sends the User-Agent with a 10 s timeout.
+    - Any failure throws AppError("UPSTREAM_UNAVAILABLE") and is not cached.
+  - Rate-limit queue after an error: the queue only holds the "wait for my turn"
+    step, never the fetch itself, and it swallows rejections. So a failed
+    request doesn't make the next one fail. A test checks that a request started
+    right after a failure still succeeds and still waits its 100 ms.
+  - src/tickers.ts: resolveTicker(input, secFetch) trims the input, ignores case
+    and treats . and - as the same. It returns the ticker as the SEC writes it
+    (BRK-B) and a 10-digit padded cik. An unknown ticker throws
+    AppError("UNKNOWN_TICKER").
+  - src/filings.ts:
+    - toFilings(submissions) is a pure function. It returns rows in SEC order,
+      with acceptanceDateTime kept, "" turned into null for reportDate and
+      description, and the full https://www.sec.gov/Archives/... url.
+    - toFiling(row) builds the response object field by field, so we don't rely
+      on Elysia to drop acceptanceDateTime.
+  - src/index.ts: the server now exits with a message at startup if
+    SEC_USER_AGENT is missing or blank. The userAgent it reads isn't used yet;
+    the routes will use it.
+
+  NOTES.md shows as modified in git status, but I didn't touch it. No git
+  commands were run and no dependencies were added.
+
+✻ Crunched for 3m 0s · done 10:12 AM
+
+※ recap: The SEC client, ticker lookup and filings mapping for the API are written, and all 30 tests pass. Next, your call: should I change moduleResolution in apps/api/tsconfig.json to "bundler" so bunx tsc --noEmit passes as configured? (disable recaps in /config)
+
+❯ I changed it to bundler myself and tsc passes now                             
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Both checks pass now with your tsconfig.json change:
+
+  $ bun test
+   30 pass
+   0 fail
+   58 expect() calls
+  Ran 30 tests across 3 files. [5.00ms]
+
+  $ bunx tsc --noEmit
+  (exit 0)
+
+  The changes are ready for you to review. The next step is the two endpoints,
+  which will use secFetch, resolveTicker and toFilings.
+
+✻ Churned for 5s · done 10:30 AM
+
+※ recap: We're building the SEC filings API in apps/api, and secFetch, resolveTicker and toFilings are now done, with tests and tsc passing. Next, after you review the changes, I'll build the two endpoints on top of them. (disable recaps in /config)
