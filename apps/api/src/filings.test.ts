@@ -35,14 +35,18 @@ test("builds each filing from the same index in every column, in SEC order", () 
 });
 
 test("returns null for an empty reportDate or description", () => {
-  const filing = toFilings(aapl).find((f) => f.accessionNumber === "0001354457-26-001062");
+  const filing = toFilings(aapl).find(
+    (f) => f.accessionNumber === "0001354457-26-001062",
+  );
 
   expect(filing?.reportDate).toBeNull();
   expect(filing?.description).toBeNull();
 });
 
 test("gives paper filings a url too", () => {
-  const filing = toFilings(aapl).find((f) => f.accessionNumber === "9999999997-17-006550");
+  const filing = toFilings(aapl).find(
+    (f) => f.accessionNumber === "9999999997-17-006550",
+  );
 
   expect(filing?.url).toBe(
     "https://www.sec.gov/Archives/edgar/data/320193/999999999717006550/9999999997-17-006550.paper",
@@ -52,9 +56,14 @@ test("gives paper filings a url too", () => {
 test("toFiling keeps only the response fields", () => {
   const filing = toFiling(toFilings(aapl)[0]);
 
-  expect(Object.keys(filing).sort()).toEqual(
-    ["accessionNumber", "description", "filingDate", "form", "reportDate", "url"],
-  );
+  expect(Object.keys(filing).sort()).toEqual([
+    "accessionNumber",
+    "description",
+    "filingDate",
+    "form",
+    "reportDate",
+    "url",
+  ]);
 });
 
 describe("parseList", () => {
@@ -75,7 +84,9 @@ describe("parseList", () => {
 
 describe("filterByForm", () => {
   test("keeps only the exact forms, ignoring case", () => {
-    const forms = filterByForm(toFilings(aapl), ["10-K", "SCHEDULE 13G"]).map((f) => f.form);
+    const forms = filterByForm(toFilings(aapl), ["10-K", "SCHEDULE 13G"]).map(
+      (f) => f.form,
+    );
 
     expect(new Set(forms)).toEqual(new Set(["10-K", "SCHEDULE 13G"]));
   });
@@ -109,7 +120,17 @@ describe("sortFilings", () => {
   test("desc is the exact reverse of asc", () => {
     const rows = toFilings(spot);
 
-    expect(sortFilings(rows, "desc")).toEqual(sortFilings(rows, "asc").reverse());
+    expect(sortFilings(rows, "desc")).toEqual(
+      sortFilings(rows, "asc").reverse(),
+    );
+  });
+
+  test("desc puts shuffled rows newest first", () => {
+    // We shuffle to assert the order
+    const newestFirst = toFilings(spot).slice(0, 8);
+    const shuffled = [3, 0, 6, 1, 7, 4, 2, 5].map((i) => newestFirst[i]);
+
+    expect(sortFilings(shuffled, "desc")).toEqual(newestFirst);
   });
 
   test("sorts by filingDate first", () => {
@@ -130,7 +151,9 @@ describe("sortFilings", () => {
 describe("checkSubmissions", () => {
   function expectBadData(data: unknown) {
     expect(() => checkSubmissions(data)).toThrow(AppError);
-    expect(() => checkSubmissions(data)).toThrow("The SEC returned unexpected filings data");
+    expect(() => checkSubmissions(data)).toThrow(
+      "The SEC returned unexpected filings data",
+    );
   }
 
   test("accepts the fixtures", () => {
@@ -138,9 +161,12 @@ describe("checkSubmissions", () => {
     expect(() => checkSubmissions(spot)).not.toThrow();
   });
 
-  test.each([[null], ["<html>"], [[]]])("throws UPSTREAM_UNAVAILABLE for %p", (data) => {
-    expectBadData(data);
-  });
+  test.each([[null], ["<html>"], [[]]])(
+    "throws UPSTREAM_UNAVAILABLE for %p",
+    (data) => {
+      expectBadData(data);
+    },
+  );
 
   // Each one breaks a copy of AAPL.json
   test.each([
@@ -148,9 +174,18 @@ describe("checkSubmissions", () => {
     ["no filings", (s: any) => delete s.filings],
     ["no filings.recent", (s: any) => delete s.filings.recent],
     ["a missing column", (s: any) => delete s.filings.recent.form],
-    ["a column that is not a list", (s: any) => (s.filings.recent.filingDate = "2026-11-12")],
-    ["a value that is not a string", (s: any) => (s.filings.recent.filingDate[3] = null)],
-    ["columns of different length", (s: any) => s.filings.recent.primaryDocument.pop()],
+    [
+      "a column that is not a list",
+      (s: any) => (s.filings.recent.filingDate = "2026-11-12"),
+    ],
+    [
+      "a value that is not a string",
+      (s: any) => (s.filings.recent.filingDate[3] = null),
+    ],
+    [
+      "columns of different length",
+      (s: any) => s.filings.recent.primaryDocument.pop(),
+    ],
     ["no filings.files", (s: any) => delete s.filings.files],
   ])("throws UPSTREAM_UNAVAILABLE for %s", (_, breakIt) => {
     const data = structuredClone(aapl);
@@ -162,10 +197,18 @@ describe("checkSubmissions", () => {
 
 describe("coverage", () => {
   test("oldest and newest filingDate, incomplete when there are older files", () => {
-    expect(coverage(aapl, toFilings(aapl))).toEqual({ from: "2015-10-07", to: "2026-11-12", complete: false });
+    expect(coverage(aapl, toFilings(aapl))).toEqual({
+      from: "2015-10-07",
+      to: "2026-11-12",
+      complete: false,
+    });
   });
 
   test("complete when filings.files is empty", () => {
-    expect(coverage(spot, toFilings(spot))).toEqual({ from: "2015-06-12", to: "2026-11-13", complete: true });
+    expect(coverage(spot, toFilings(spot))).toEqual({
+      from: "2015-06-12",
+      to: "2026-11-13",
+      complete: true,
+    });
   });
 });

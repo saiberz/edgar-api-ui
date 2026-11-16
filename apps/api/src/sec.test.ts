@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { AppError, createSecFetch, requireUserAgent, TICKERS_URL } from "./sec";
 
 const USER_AGENT = "Test User test@example.com";
@@ -45,6 +45,17 @@ describe("secFetch", () => {
 
     expect(await secFetch(FILINGS_URL)).toEqual({ hello: "world" });
     expect(calls[0].init?.headers).toEqual({ "User-Agent": USER_AGENT });
+  });
+
+  test("gives each request a 10-second timeout", async () => {
+    const timeout = spyOn(AbortSignal, "timeout");
+    const { secFetch, calls } = setup();
+
+    await secFetch(FILINGS_URL);
+
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    expect(calls[0].init?.signal).toBe(timeout.mock.results[0].value as AbortSignal);
+    timeout.mockRestore();
   });
 
   test("serves a second call from the cache", async () => {
@@ -95,6 +106,8 @@ describe("secFetch", () => {
   test.each([
     ["403", () => new Response("Forbidden", { status: 403 })],
     ["429", () => new Response("Too many requests", { status: 429 })],
+    ["403 with a JSON body", () => Response.json({ error: "Forbidden" }, { status: 403 })],
+    ["429 with a JSON body", () => Response.json({ error: "Too many requests" }, { status: 429 })],
     ["500", () => new Response("Error", { status: 500 })],
     ["network error", () => Promise.reject(new TypeError("fetch failed"))],
     ["invalid JSON", () => new Response("<html>")],
