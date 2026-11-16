@@ -1,0 +1,232 @@
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 · Claude Pro
+ ▝▝   ▝▝   ~/Developer/playground/edgar-api-ui
+
+
+❯ Read json files in fixtures folder:                                           
+                                                                                
+  1. Draft a GLOSSARY.md file for: CIK , accession number, filingDate vs        
+  reportDate vs acceptanceDateTime, primaryDocument, primaryDocDescription, /A  
+  suffix, 20-F , 6-K, 40-F, foreign private issuer, filings.recent ,            
+  filings.file . One sentence for each and where in the json appears            
+  2. Independent of list in point 1 , what in this data would a client have to  
+  handle? e.g. fields that can be empty, same thing written differently in      
+  different places, values that are not unique , anything that's worth to look  
+  at, one line with an example from the fixtures.                               
+                                                                                
+  Don't guess anything and mark with (?) if unsure about any field              
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ Write(GLOSSARY.md)
+  ⎿  Wrote 21 lines to GLOSSARY.md
+      1 # Glossary
+      2 
+      3 Terms used in the SEC EDGAR data under `fixtures/`. Paths use `re
+        cent.X` as shorthand for `filings.recent.X`.
+      4 Entries marked **(?)** are not confirmed by the fixtures themselv
+        es.
+      5 
+      6 | Term | Definition | Where it appears |
+      7 | --- | --- | --- |
+      8 | **CIK** | Central Index Key: the number the SEC assigns to ever
+     … +14 lines (~4 KB) (ctrl+o to expand)
+
+⏺ I wrote GLOSSARY.md at the repo root. Here is point 2, all checked against the
+  fixtures.
+
+  2. Things a client has to handle
+
+  Shape and identifiers
+  - recent is stored as columns, not rows. Each field is a separate parallel
+    array, so you rebuild a filing from index i across all of them, e.g.
+    recent.form[0] + recent.accessionNumber[0].
+  - The CIK has two formats. It's a zero-padded string in submissions and a
+    plain number in tickers, e.g. "0000320193" vs cik_str: 320193.
+  - company_tickers.json is an object with numeric-string keys, not an array,
+    e.g. {"0": {...}, "1": {...}}.
+  - Ticker spellings vary. e.g. "BRK-B", and JPM's "JPM-PC", "JPM-PD".
+  - One company can have several tickers. exchanges is a parallel array that
+    repeats values, e.g. JPM has 9 tickers and 9 × "NYSE".
+  - Name casing differs between companies. e.g. "Apple Inc." vs "JPMORGAN CHASE 
+    & CO".
+
+  Paging and volume
+  - recent size varies a lot. AAPL has 1002 rows, SPOT 390, JPM 26,453 (4.7 MB),
+    and JPM's rows span only one year (2025-11-14 → 2026-11-16).
+  - Older history lives in filings.files. It has to be fetched separately and
+    may be empty, e.g. SPOT files: [], JPM 72 files.
+
+  Empty values
+  - Empty can be "" or null, depending on the field. e.g. lei: null vs
+    description: "", website: "", flags: "".
+  - reportDate is often "". e.g. empty in 26,284 of JPM's 26,453 rows; always
+    empty for 424B2/FWP/144.
+  - act, fileNumber and filmNumber are often "". e.g. AAPL Form 4: act: "",
+    fileNumber: "", filmNumber: "".
+  - items is mostly empty, and not always 8-K item codes. SPOT has "POS 
+    AM,0001193125-18-197836,2018-06-21" (EFFECT), "06b" (D), "20180326,20180326"
+    (CT ORDER). JPM has ",," (EFFECT).
+  - isXBRLNumeric can be 0, 1 or null. e.g. null in 941 of AAPL's 1002 rows.
+  - Booleans come as 0/1 integers. e.g. isXBRL: 1,
+    insiderTransactionForOwnerExists: 0.
+  - isForeignLocation disagrees between the two addresses. e.g. AAPL
+    mailing.isForeignLocation: 0 vs business.isForeignLocation: null.
+  - Placeholder EIN. e.g. SPOT ein: "000000000".
+  - Foreign addresses have null state/zip. e.g. SPOT stateOrCountry: null,
+    zipCode: null, countryCode: "N4".
+
+  Same thing written differently
+  - Old and new form names both appear. e.g. "SC 13G" / "SC 13G/A" and "SCHEDULE
+    13G" / "SCHEDULE 13G/A", both in AAPL and SPOT.
+  - primaryDocDescription is free text with no consistency. e.g. AAPL 8-K: "8-K"
+    ×78, "FORM 8-K" ×23, "" ×1. JPM 424B2 has "PRELIMINARY PRICING SUPPLEMEN"
+    (truncated) and "AMENDED & RESTATED" vs "AMENDED AND RESTATED".
+  - The "Description" fields sometimes just repeat the code. e.g. AAPL
+    stateOfIncorporationDescription: "CA", but SPOT has "N4" → "Luxembourg".
+  - core_type doesn't always match form. e.g. AAPL 8-K/10-Q/10-K → core_type: 
+    "XBRL"; UPLOAD → "LETTER". What core_type means exactly is unclear (?).
+  - Phone numbers have no fixed format. e.g. "(408) 996-1010", "2122706000",
+    "1-917-748-6610".
+  - fiscalYearEnd is an MMDD string, not a date. e.g. AAPL "0926".
+  - formerNames timestamps carry different offsets. e.g. T05:00:00.000Z,
+    T04:00:00.000Z, T00:00:00.000Z.
+
+  Values that aren't unique
+  - accessionNumber is the only unique filing key. It was unique in all three
+    files.
+  - acceptanceDateTime repeats. e.g. JPM 2026-05-04T12:17:13.000Z ×9 (several
+    SCHEDULE 13G/A).
+  - primaryDocument repeats across filings. e.g. JPM form424b2.htm ×9372, SPOT
+    filename1.htm ×7. Only accession number + document identifies a file.
+  - fileNumber is shared by many filings. It's a registration number, not a
+    filing ID, e.g. JPM 333-293684 ×14,678.
+  - The accession prefix is the submitter's CIK, not always the company's. e.g.
+    only 161 of JPM's 26,453 accession numbers start with 0000019617.
+
+  Dates
+  - filingDate can be days after the acceptance date. e.g. JPM filingDate: 
+    "2026-11-16", accepted 2026-11-14T02:03:23Z.
+  - filingDate can also be earlier than the acceptance date (in UTC). e.g. AAPL
+    Form 4 filingDate: "2023-10-03", accepted 2023-10-04T01:09:17Z.
+  - reportDate can be after filingDate. e.g. AAPL DEF 14A reportDate: 
+    "2026-02-24", filingDate: "2026-01-08". That date may be the meeting date
+    (?).
+  - formerNames includes the current name, and ranges overlap. e.g. JPM
+    "JPMORGAN CHASE & CO" runs 2009-02-02 → 2026-11-16, overlapping "J P MORGAN 
+    CHASE & CO" 2001 → 2011.
+  - formerNames can have a zero-length range. e.g. AAPL "APPLE COMPUTER INC/ FA"
+    from = to = 1997-07-28.
+
+  Document types and links
+  - primaryDocument isn't always HTML. e.g. .xml (with an xsl…/ prefix), .txt,
+    .pdf, and .paper ("9999999997-17-000002.paper", "AUTO-GENERATED PAPER 
+    DOCUMENT").
+  - Size varies widely. e.g. size ranges from 1,347 to 74,694,140 bytes.
+
+  Foreign issuer data
+  - A company's forms can change over time. e.g. SPOT's last 20-F is 2026-02-10,
+    and it has Forms 3/4 only from 2026-03-18 on. Whether this means it lost
+    foreign private issuer status is not confirmed (?).
+  - entityType differs. e.g. "operating" (AAPL, JPM) vs "other" (SPOT).
+
+✻ Cogitated for 1m 41s · done 8:06 AM
+
+※ recap: You asked for an EDGAR fixtures glossary plus a list of data quirks a client must handle. Both are done: GLOSSARY.md is at the repo root and the quirks list is above; next, review them and decide whether to commit. (disable recaps in /config)
+
+❯ Append that list to fixtures/README.md under a new heading , don't change     
+  anything else in that file                                                    
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(cat >> fixtures/README.md <<'EOF'…)
+  ⎿   fixtures/README.md | 66 +++++++++++++++++++++++++++++++++++++++++++++
+     +++++++++
+      1 file changed, 66 insertions(+)
+  ⎿  Updated fixtures/README.md (+66 -0)
+      10  - AAPL: a normal US company.
+      11  - SPOT: not a US company
+      12  - JPM: big recent list
+      13 +                                                               
+      14 +## Things a client has to handle                               
+      15 +                                                               
+      16 +Entries marked **(?)** are not confirmed by the fixtures themse
+         +lves.                                                          
+      17 +                                                               
+      18 +**Shape and identifiers**                                      
+      19 +                                                               
+      20 +- **`recent` is stored as columns, not rows.** Each field is a 
+         +separate parallel array, so you rebuild a filing from index `i`
+         + across all of them, e.g. `recent.form[0]` + `recent.accessionN
+         +umber[0]`.                                                     
+      21 +- **The CIK has two formats.** It's a zero-padded string in sub
+         +missions and a plain number in tickers, e.g. `"0000320193"` vs 
+         +`cik_str: 320193`.                                             
+      22 +- **`company_tickers.json` is an object with numeric-string key
+         +s, not an array**, e.g. `{"0": {...}, "1": {...}}`.            
+      23 +- **Ticker spellings vary.** e.g. `"BRK-B"`, and JPM's `"JPM-PC
+         +"`, `"JPM-PD"`.                                                
+      24 +- **One company can have several tickers.** `exchanges` is a pa
+         +rallel array that repeats values, e.g. JPM has 9 tickers and 9 
+         +× `"NYSE"`.                                                    
+      25 +- **Name casing differs between companies.** e.g. `"Apple Inc."
+         +` vs `"JPMORGAN CHASE & CO"`.                                  
+      26 +                                                               
+      27 +**Paging and volume**                                          
+      28 +                                                               
+      29 +- **`recent` size varies a lot.** AAPL has 1002 rows, SPOT 390,
+         + JPM 26,453 (4.7 MB), and JPM's rows span only one year (2025-1
+         +1-14 → 2026-11-16).                                            
+      30 +- **Older history lives in `filings.files`.** It has to be fetc
+         +hed separately and may be empty, e.g. SPOT `files: []`, JPM 72 
+         +files.                                                         
+      31 +                                                               
+      32 +**Empty values**                                               
+      33 +                                                               
+      34 +- **Empty can be `""` or `null`, depending on the field.** e.g.
+         + `lei: null` vs `description: ""`, `website: ""`, `flags: ""`. 
+      35 +- **`reportDate` is often `""`.** e.g. empty in 26,284 of JPM's
+         + 26,453 rows; always empty for 424B2/FWP/144.                  
+      36 +- **`act`, `fileNumber` and `filmNumber` are often `""`.** e.g.
+         + AAPL Form 4: `act: ""`, `fileNumber: ""`, `filmNumber: ""`.   
+      37 +- **`items` is mostly empty, and not always 8-K item codes.** S
+         +POT has `"POS AM,0001193125-18-197836,2018-06-21"` (EFFECT), `"
+         +06b"` (D), `"20180326,20180326"` (CT ORDER). JPM has `",,"` (EF
+         +FECT).                                                         
+      38 +- **`isXBRLNumeric` can be `0`, `1` or `null`.** e.g. null in 9
+         +41 of AAPL's 1002 rows.                                        
+      39 +- **Booleans come as `0`/`1` integers.** e.g. `isXBRL: 1`, `ins
+         +iderTransactionForOwnerExists: 0`.                             
+      40 +- **`isForeignLocation` disagrees between the two addresses.** 
+         +e.g. AAPL `mailing.isForeignLocation: 0` vs `business.isForeign
+         +Location: null`.                                               
+      41 +- **Placeholder EIN.** e.g. SPOT `ein: "000000000"`.           
+      42 +- **Foreign addresses have `null` state/zip.** e.g. SPOT `state
+         +OrCountry: null`, `zipCode: null`, `countryCode: "N4"`.        
+      43 +                                                               
+      44 +**Same thing written differently**                             
+      45 +                                                               
+      46 +- **Old and new form names both appear.** e.g. `"SC 13G"` / `"S
+         +C 13G/A"` and `"SCHEDULE 13G"` / `"SCHEDULE 13G/A"`, both in AA
+         +PL and SPOT.                                                   
+      47 +- **`primaryDocDescription` is free text with no consistency.**
+         + e.g. AAPL 8-K: `"8-K"` ×78, `"FORM 8-K"` ×23, `""` ×1. JPM 424
+         +B2 has `"PRELIMINARY PRICING SUPPLEMEN"` (truncated) and `"AMEN
+         +DED & RESTATED"` vs `"AMENDED AND RESTATED"`.                  
+      48 +- **The "Description" fields sometimes just repeat the code.** 
+         +e.g. AAPL `stateOfIncorporationDescription: "CA"`, but SPOT has
+         + `"N4"` → `"Luxembourg"`.                                      
+      49 +- **`core_type` doesn't always match `form`.** e.g. AAPL 8-K/10
+         +-Q/10-K → `core_type: "XBRL"`; `UPLOAD` → `"LETTER"`. What `cor
+         +e_type` means exactly is unclear (?).                          
+     … 29 more lines (ctrl+o to expand)
+
+⏺ I added the list to fixtures/README.md under a new heading, ## Things a client
+  has to handle. The diff shows only added lines (66) and nothing changed in
+  the existing text. I also added a one-line note under the heading saying what
+  (?) means, since the list uses that marker. GLOSSARY.md is a new file, so the
+  diff doesn't show it, and neither file is committed yet.
+
+✻ Cogitated for 24s · done 8:11 AM
+
+※ recap: You're documenting the SEC EDGAR fixtures: GLOSSARY.md is new at the repo root, and the client-handling notes are appended to fixtures/README.md. Next, review both files and commit them, since neither is committed yet. (disable recaps in /config)
