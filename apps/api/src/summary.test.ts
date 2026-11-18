@@ -55,6 +55,12 @@ describe("summarize", () => {
     expect(summarize(apple, [late], window).countsByForm).toEqual({ LATE: 1 });
   });
 
+  test("counts filings on the first day of the window", () => {
+    const filing = { ...toFilings(aapl)[0], form: "8-K", filingDate: window.from };
+
+    expect(summarize(apple, [filing], window).countsByForm).toEqual({ "8-K": 1 });
+  });
+
   test("doesn't count filings before the window", () => {
     const old = { ...toFilings(aapl)[0], form: "OLD", filingDate: "2025-11-16" };
 
