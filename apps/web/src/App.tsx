@@ -18,7 +18,12 @@ function App() {
           Summary
         </button>
       </nav>
-      {tab === 'filings' ? <FilingsPage /> : <SummaryPage />}
+      <div hidden={tab !== 'filings'}>
+        <FilingsPage />
+      </div>
+      <div hidden={tab !== 'summary'}>
+        <SummaryPage />
+      </div>
     </main>
   )
 }
