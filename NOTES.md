@@ -35,3 +35,4 @@ I added some manual tests and checked for typos on this file
 I created the React app by hand with Vite. Claude built the two pages, using Eden Treaty for the API types and the Vite proxy so the API needs no CORS.
 Bun installed two copies of Elysia, so Eden rejected the API's types. I chose a small tsconfig fix in apps/web instead of changing package versions, because it doesn't touch the API.
 I tested it in the browser with AAPL, SPOT, JPM and NOPE, on both pages.
+After testing I found a blank page after every search, because Eden turned dates into Date objects. I turned that off with `parseDate: false` and fixed the README setup steps.
