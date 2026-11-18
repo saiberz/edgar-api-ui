@@ -30,8 +30,8 @@ Claude compared the code with the spec and listed six edge cases. I fixed one: b
 
 I added some manual tests and checked for typos on this file
 
-### What's missing
+### 8. Frontend
 
-I ran out of time before the frontend. The backend is complete and tested.
-
-How I would build the frontend: a React app in apps/web made with Vite, using Eden Treaty with the App type that apps/api already exports, so the types come from the server. The Vite dev proxy lets the browser talk to one address, since the SEC API doesn't allow calls from a browser. One page for filings (ticker, form filter, sort, pages, links) and one for the summary.
+I created the React app by hand with Vite. Claude built the two pages, using Eden Treaty for the API types and the Vite proxy so the API needs no CORS.
+Bun installed two copies of Elysia, so Eden rejected the API's types. I chose a small tsconfig fix in apps/web instead of changing package versions, because it doesn't touch the API.
+I tested it in the browser with AAPL, SPOT, JPM and NOPE, on both pages.
