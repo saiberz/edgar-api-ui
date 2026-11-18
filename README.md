@@ -3,7 +3,7 @@
 A small API over the SEC's EDGAR data: list a company's filings, or summarize recent filings for several companies at once.
 
 - `apps/api`: the API, built with Bun and Elysia 1.4
-- `apps/web`: a React frontend (coming later)
+- `apps/web`: a React frontend, built with Vite
 
 ## Endpoints
 
@@ -29,20 +29,24 @@ bun install
 
 The SEC asks every client to send a User-Agent with a name and email. Create `apps/api/.env`:
 
-```bash
-SEC_USER_AGENT="Jane Doe jane@example.com"
-```
+Set SEC_USER_AGENT env variable
 
 The server won't start without it. Bun loads `.env` automatically.
 
 ## Run
 
+From the repo root:
+
 ```bash
-cd apps/api
+bun install
+echo 'SEC_USER_AGENT="Name name@mail.com"' > apps/api/.env
 bun run dev
 ```
 
-The API runs at http://localhost:3000 and restarts when files change.
+This starts both apps:
+
+- Web app: http://localhost:5173
+- API: http://localhost:3000
 
 ## Test
 
