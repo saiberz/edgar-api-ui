@@ -6,8 +6,9 @@ export type FilingsResult = typeof FilingsPage.static
 export type SummaryResult = typeof SummaryResponse.static
 
 // The Vite dev proxy forwards /api to the API on :3000, so there is no CORS.
-// Treaty needs a full URL, so we use the page's origin
-export const api = treaty<App>(window.location.origin + '/api')
+// Treaty needs a full URL, so we use the page's origin.
+// parseDate is off because Treaty would turn "YYYY-MM-DD" strings into Date objects, which React can't render
+export const api = treaty<App>(window.location.origin + '/api', { parseDate: false })
 
 type ApiFailure = { status: number; value: unknown }
 

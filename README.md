@@ -29,17 +29,18 @@ bun install
 
 The SEC asks every client to send a User-Agent with a name and email. Create `apps/api/.env`:
 
-Set SEC_USER_AGENT env variable
+```bash
+SEC_USER_AGENT="Jane Doe jane@example.com"
+```
 
 The server won't start without it. Bun loads `.env` automatically.
 
 ## Run
 
-From the repo root:
+From the repo root, after creating `apps/api/.env` as in Setup:
 
 ```bash
 bun install
-echo 'SEC_USER_AGENT="Name name@mail.com"' > apps/api/.env
 bun run dev
 ```
 
